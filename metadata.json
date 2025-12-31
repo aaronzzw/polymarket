@@ -1,0 +1,5 @@
+{
+  "name": "Polymarket Edge Terminal",
+  "description": "基于 Polymarket 15 分钟预测市场的专业交易终端，内置本地量化策略模拟与实时统计。",
+  "requestFramePermissions": []
+}
