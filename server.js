@@ -1,7 +1,8 @@
 
 /**
  * PolyEdge 核心引擎 - Smart Ape 真实策略版
- * 核心逻辑：高流动性 + 临近结算 + 无视 timeframe + 捕获定价偏离
+ * 资产锁定：BTC, ETH, SOL
+ * 策略逻辑：只看 Crypto 类别 + 临近结算 + 高流动性
  */
 import http from 'http';
 
@@ -12,8 +13,8 @@ let state = {
     sumTarget: 0.992,     
     betAmount: 10,
     autoBet: true,
-    maxSettleHours: 12,    // 默认关注 12 小时内结算的市场
-    minVolume: 1000        // 过滤掉无流动性的僵尸盘
+    maxSettleHours: 24,    // 监控 24 小时内结算
+    minVolume: 500         // 过滤低流动性
   },
   stats: {
     totalTrades: 0,
@@ -41,56 +42,53 @@ function addLog(message, level = 'INFO') {
   };
   state.logs.push(log);
   if (state.logs.length > 50) state.logs.shift();
-  // 生产环境只打印非 INFO 日志，彻底解决控制台刷屏
-  if (level !== 'INFO') console.log(`[${log.timestamp}] [${level}] ${message}`);
+  // 只在重要事件（WARN/SUCCESS/ERROR）时输出到后端控制台
+  if (level !== 'INFO') {
+    console.log(`[${log.timestamp}] [${level}] ${message}`);
+  }
 }
 
 async function updateMarketData() {
   scanCount++;
   try {
-    // 1. 策略驱动的市场发现：只看“流动性”和“结算时间”
+    // 1. 指定 API 发现：只抓取 Crypto 类活跃市场
     if (state.rounds.length === 0 || scanCount % 15 === 0) {
-      // 优先抓取成交量前 200 的活跃市场
-      const res = await fetch(`${GAMMA_API}/markets?active=true&closed=false&limit=200&order=volume24hr&dir=desc`);
-      if (!res.ok) throw new Error(`Gamma API Down`);
+      const res = await fetch(`${GAMMA_API}/markets?category=Crypto&active=true&limit=200`);
+      if (!res.ok) throw new Error(`API Fetch Error`);
       const allMarkets = await res.json();
       
       const filtered = allMarkets.filter(m => {
         const slug = (m.slug || "").toLowerCase();
         const title = (m.question || "").toLowerCase();
-        const volume = parseFloat(m.volume24hr || 0);
         
-        // 资产：BTC, ETH, SOL, XRP, DOGE, PEPE 等主流加密资产
-        const isCrypto = /btc|eth|sol|xrp|doge|pepe|bitcoin|ethereum|solana|ripple/.test(slug) || 
-                         /bitcoin|ethereum|solana|xrp/.test(title);
+        // 严格资产过滤：只扫描 BTC, ETH, SOL
+        const isTargetAsset = /\b(btc|eth|sol|bitcoin|ethereum|solana)\b/.test(slug) || 
+                              /\b(bitcoin|ethereum|solana)\b/i.test(title);
         
-        // 结算时间：临近结算 (24h内)
+        // 时间筛选：24小时内结算
         const msLeft = new Date(m.endDate).getTime() - Date.now();
         const hoursLeft = msLeft / (1000 * 60 * 60);
         const isSoon = hoursLeft > 0 && hoursLeft <= state.config.maxSettleHours;
 
-        // 流动性：必须有真实成交
-        const hasLiquidity = volume >= state.config.minVolume;
-
-        // 结构：必须是二元期权
         let tokens = m.clobTokenIds;
         if (typeof tokens === 'string') {
           try { tokens = JSON.parse(tokens); } catch(e) { return false; }
         }
         
-        return isCrypto && isSoon && hasLiquidity && Array.isArray(tokens) && tokens.length === 2;
+        return isTargetAsset && isSoon && Array.isArray(tokens) && tokens.length === 2;
       });
 
       if (filtered.length > 0) {
-        const newRounds = filtered.map(m => {
+        state.rounds = filtered.map(m => {
           let tokens = typeof m.clobTokenIds === 'string' ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
           let asset = 'CRYPTO';
           if (m.slug.includes('btc')) asset = 'BTC';
           else if (m.slug.includes('eth')) asset = 'ETH';
           else if (m.slug.includes('sol')) asset = 'SOL';
-          else if (m.slug.includes('xrp')) asset = 'XRP';
 
           const oldRound = state.rounds.find(r => r.id === m.id);
+          const msLeft = new Date(m.endDate).getTime() - Date.now();
+
           return {
             id: m.id,
             asset,
@@ -106,69 +104,62 @@ async function updateMarketData() {
             leg1Price: oldRound?.leg1Price || null,
             countdown: Math.floor(msLeft / 1000)
           };
-        });
+        }).sort((a,b) => a.countdown - b.countdown).slice(0, 10);
         
-        // 按结算迫切程度排序
-        state.rounds = newRounds.sort((a,b) => a.countdown - b.countdown).slice(0, 12);
-        
-        if (scanCount === 1) addLog(`Alpha 引擎就绪: 锁定 ${state.rounds.length} 个高频套利目标`, 'SUCCESS');
+        if (scanCount === 1) addLog(`Alpha 策略已初始化: 锁定 BTC/ETH/SOL 目标盘口`, 'SUCCESS');
       }
     }
 
-    // 2. 毫秒级差价监控
+    // 2. 价格偏差实时扫描
     await Promise.all(state.rounds.map(async (round) => {
       try {
-        const [yesRes, noRes] = await Promise.all([
+        const [y, n] = await Promise.all([
           fetch(`${CLOB_API}/book?token_id=${round.yesTokenId}`),
           fetch(`${CLOB_API}/book?token_id=${round.noTokenId}`)
         ]);
-        const yesData = await yesRes.json();
-        const noData = await noRes.json();
+        const yData = await y.json();
+        const nData = await n.json();
 
-        const newYes = yesData.asks?.[0]?.price ? parseFloat(yesData.asks[0].price) : round.askYes;
-        const newNo = noData.asks?.[0]?.price ? parseFloat(noData.asks[0].price) : round.askNo;
+        const askYes = yData.asks?.[0]?.price ? parseFloat(yData.asks[0].price) : round.askYes;
+        const askNo = nData.asks?.[0]?.price ? parseFloat(nData.asks[0].price) : round.askNo;
 
-        round.historyYes.push(newYes);
-        if (round.historyYes.length > 20) round.historyYes.shift();
+        round.historyYes.push(askYes);
+        if (round.historyYes.length > 25) round.historyYes.shift();
         
-        // 发现错价
         if (round.status === 'SCANNING' && state.config.autoBet) {
-          const prev = round.historyYes[round.historyYes.length - 2] || newYes;
-          const drop = ((prev - newYes) / prev) * 100;
-          if (drop >= state.config.dropThreshold && newYes > 0.05 && newYes < 0.95) {
-            executeOrder(round, 'YES', 1, newYes);
+          const prev = round.historyYes[round.historyYes.length - 2] || askYes;
+          const drop = ((prev - askYes) / prev) * 100;
+          if (drop >= state.config.dropThreshold && askYes > 0.05 && askYes < 0.95) {
+            executeOrder(round, 'YES', 1, askYes);
             round.status = 'HEDGING';
             round.leg1Side = 'YES';
-            round.leg1Price = newYes;
-            addLog(`捕捉异动: ${round.symbol} 偏离 ${drop.toFixed(2)}%`, 'WARN');
+            round.leg1Price = askYes;
+            addLog(`发现错价: ${round.symbol} 波动 ${drop.toFixed(2)}% | 价格: ${askYes}`, 'WARN');
           }
         }
 
-        // 完成对冲
         if (round.status === 'HEDGING' && state.config.autoBet) {
-          const totalCost = round.leg1Price + newNo;
-          if (totalCost <= state.config.sumTarget) {
-            executeOrder(round, 'NO', 2, newNo);
-            const profit = (1 - totalCost) * state.config.betAmount;
+          const sum = round.leg1Price + askNo;
+          if (sum <= state.config.sumTarget) {
+            executeOrder(round, 'NO', 2, askNo);
+            const profit = (1 - sum) * state.config.betAmount;
             state.stats.totalTrades++;
             state.stats.wonTrades++;
             state.stats.netProfit += profit;
             state.stats.balance += profit;
             state.stats.winRate = (state.stats.wonTrades / state.stats.totalTrades) * 100;
             round.status = 'LOCKED';
-            addLog(`策略闭环: ${round.symbol} | 利润: $${profit.toFixed(2)}`, 'SUCCESS');
-            setTimeout(() => { round.status = 'SCANNING'; round.leg1Side = null; }, 30000);
+            addLog(`套利成功: ${round.symbol} 锁定收益 $${profit.toFixed(2)}`, 'SUCCESS');
+            setTimeout(() => { round.status = 'SCANNING'; round.leg1Side = null; }, 60000);
           }
         }
 
-        round.askYes = newYes;
-        round.askNo = newNo;
+        round.askYes = askYes;
+        round.askNo = askNo;
         round.countdown = Math.max(0, round.countdown - 2);
       } catch (e) {}
     }));
-  } catch (e) {
-    // 错误处理
-  }
+  } catch (e) {}
 }
 
 function executeOrder(round, side, leg, price) {
@@ -194,13 +185,10 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(state));
   } else if (req.url === '/config' && req.method === 'POST') {
-    let body = '';
-    req.on('data', c => body += c);
+    let b = '';
+    req.on('data', c => b += c);
     req.on('end', () => { 
-      try {
-        state.config = { ...state.config, ...JSON.parse(body) }; 
-        res.end('ok');
-      } catch(e) { res.writeHead(400); res.end('fail'); }
+      try { state.config = { ...state.config, ...JSON.parse(b) }; res.end('ok'); } catch(e) { res.writeHead(400); res.end('fail'); }
     });
   } else { res.writeHead(404); res.end(); }
 });
