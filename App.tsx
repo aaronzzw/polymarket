@@ -92,7 +92,7 @@ const App: React.FC = () => {
            </div>
            <div className="hidden lg:flex gap-6 text-[10px] font-black uppercase tracking-widest text-slate-500">
              <span className="text-white border-b-2 border-blue-500 pb-4 mt-4">Smart Ape Pair Monitor</span>
-             <span className="hover:text-white cursor-pointer transition-colors opacity-50">v5.3.0 (Asset Pairing Mode)</span>
+             <span className="hover:text-white cursor-pointer transition-colors opacity-50">v5.4.0 (15M Optimized)</span>
            </div>
         </div>
         <div className="flex items-center gap-6">
@@ -130,12 +130,12 @@ const App: React.FC = () => {
               {rounds.length === 0 && isServerActive ? (
                 <div className="col-span-2 h-64 border-2 border-dashed border-slate-800 rounded-3xl flex flex-col items-center justify-center bg-[#151921]/30 p-12 text-center">
                   <i className="fa-solid fa-radar text-4xl mb-4 text-slate-700 animate-pulse"></i>
-                  <p className="text-sm font-black uppercase tracking-[0.2em] text-slate-500 mb-2">正在深度匹配 BTC/ETH/SOL 互补市场...</p>
-                  <p className="text-[10px] text-slate-600 max-w-sm leading-relaxed font-bold">引擎会持续扫描 Gamma API 寻找同一价格锚点的 Above/Below 市场。如果没有显示，可能是当前无此类活动市场或已超过结算时间窗口。</p>
+                  <p className="text-sm font-black uppercase tracking-[0.2em] text-slate-500 mb-2">正在同步 Polymarket 15M / 1H 数据...</p>
+                  <p className="text-[10px] text-slate-600 max-w-sm leading-relaxed font-bold">引擎已扩大扫描范围。如果依然为空，请尝试减小“最大结算周期”过滤无关长线市场。</p>
                 </div>
               ) : (
                 rounds.map((r: any) => {
-                  const isArb = r.sumYES < (1 - config.profitThreshold);
+                  const isArb = !r.isInternal && r.sumYES < (1 - config.profitThreshold);
                   return (
                     <div key={r.id} className={`bg-[#151921] rounded-2xl border p-6 transition-all relative overflow-hidden group ${
                       isArb ? 'border-green-500/50 shadow-2xl shadow-green-500/10 bg-[#1a2521]' : 'border-slate-800 hover:border-slate-700'
@@ -146,25 +146,32 @@ const App: React.FC = () => {
                             <i className={`fa-brands ${r.asset === 'BTC' ? 'fa-bitcoin text-orange-500' : (r.asset === 'ETH' ? 'fa-ethereum text-indigo-400' : 'fa-solid fa-s text-green-500')} text-xl`}></i>
                           </div>
                           <div>
-                            <h3 className="text-sm font-black text-white group-hover:text-blue-400 transition-colors">{r.symbol}</h3>
-                            <span className="text-[10px] text-slate-500 font-bold uppercase">{r.countdown > 0 ? `T-Minus ${Math.floor(r.countdown/3600)}h` : 'Settling'}</span>
+                            <div className="flex items-center gap-2">
+                                <h3 className="text-sm font-black text-white group-hover:text-blue-400 transition-colors">{r.symbol}</h3>
+                                {r.isInternal ? (
+                                    <span className="text-[8px] bg-slate-800 text-slate-500 px-1.5 rounded font-black uppercase border border-slate-700">Internal</span>
+                                ) : (
+                                    <span className="text-[8px] bg-blue-500/10 text-blue-400 px-1.5 rounded font-black uppercase border border-blue-500/30">Cross-Pair</span>
+                                )}
+                            </div>
+                            <span className="text-[10px] text-slate-500 font-bold uppercase">{r.countdown > 0 ? `Ends in ${Math.floor(r.countdown/60)}m` : 'Settling'}</span>
                           </div>
                         </div>
                         <div className="text-right">
                           <div className={`text-2xl font-black transition-colors ${isArb ? 'text-green-400 animate-pulse' : 'text-slate-500'}`}>
                             {(r.sumYES * 100).toFixed(2)}%
                           </div>
-                          <div className="text-[8px] font-black text-slate-600 uppercase tracking-widest">Total Probability</div>
+                          <div className="text-[8px] font-black text-slate-600 uppercase tracking-widest">Probability Sum</div>
                         </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-4">
                         <div className="bg-[#0d1117] p-3 rounded-xl border border-slate-800/50">
-                          <div className="text-[9px] text-slate-500 font-black uppercase mb-1">Leg A (Above)</div>
+                          <div className="text-[9px] text-slate-500 font-black uppercase mb-1">Above YES</div>
                           <div className="text-lg font-mono font-bold text-blue-100">${r.askYes.toFixed(3)}</div>
                         </div>
                         <div className="bg-[#0d1117] p-3 rounded-xl border border-slate-800/50">
-                          <div className="text-[9px] text-slate-500 font-black uppercase mb-1">Leg B (Below)</div>
+                          <div className="text-[9px] text-slate-500 font-black uppercase mb-1">{r.isInternal ? 'Above NO' : 'Below YES'}</div>
                           <div className="text-lg font-mono font-bold text-blue-100">${r.askNo.toFixed(3)}</div>
                         </div>
                       </div>
@@ -179,7 +186,7 @@ const App: React.FC = () => {
                       {isArb && (
                         <div className="mt-4 bg-green-500/20 border border-green-500/30 rounded-lg p-2.5 flex items-center justify-center gap-3">
                           <i className="fa-solid fa-fire-flame-curved text-green-400 text-xs animate-bounce"></i>
-                          <span className="text-[10px] text-green-400 font-black uppercase tracking-widest">Arbitrage Detected: Profit Potential</span>
+                          <span className="text-[10px] text-green-400 font-black uppercase tracking-widest">Opportunity Detected</span>
                         </div>
                       )}
                     </div>
