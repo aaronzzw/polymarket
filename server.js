@@ -1,7 +1,7 @@
 
 /**
- * PolyEdge Arbitrage Core - "Smart Ape" Pair Logic
- * 深度优化：支持 15M 高频市场，确保面板始终显示数据
+ * PolyEdge Arbitrage Core - "Smart Ape" 15M Engine
+ * 针对 Bitcoin Up or Down - 15 minute 市场深度优化
  */
 import http from 'http';
 
@@ -9,10 +9,10 @@ let state = {
   config: {
     engineActive: false,
     scanIntervalMs: 2000,
-    profitThreshold: 0.008, 
+    profitThreshold: 0.005, 
     betAmount: 10,
     autoBet: true,
-    maxSettleMinutes: 1440 
+    maxSettleMinutes: 120 // 缩短默认窗口，专注于近期市场
   },
   stats: {
     totalTrades: 0,
@@ -64,117 +64,124 @@ function parseTokens(tokenIds) {
 }
 
 /**
- * 价格提取逻辑：识别 slug 中的关键价格
+ * 价格与时间提取逻辑：识别 15M 市场的关键信息
+ * 示例 Slug: bitcoin-above-68000-at-1015pm-et
  */
-const extractPrice = (s) => {
-    // 匹配如 above-68000, below-68000, 68000-at 等格式
-    const match = s.match(/(?:above|below|higher|lower)-(\d+(?:\.\d+)?)/i) || s.match(/(\d+(?:\.\d+)?)-at/i);
-    if (match) return match[1];
+const extractMarketInfo = (m) => {
+    const slug = (m.slug || "").toLowerCase();
+    const question = (m.question || "").toLowerCase();
     
-    // 后备方案：寻找较大的数字
-    const allNums = s.match(/\d+(?:\.\d+)?/g);
-    if (allNums) {
-        return allNums.find(n => parseFloat(n) > 50) || null;
-    }
-    return null;
+    // 识别 15M 市场
+    const is15M = slug.includes('15m') || slug.includes('15-minute') || question.includes('15 minute');
+    
+    // 匹配价格数字 (通常跟在 above/below 后面)
+    const priceMatch = slug.match(/(?:above|below|higher|lower)-(\d+(?:\.\d+)?)/i);
+    const price = priceMatch ? priceMatch[1] : null;
+    
+    // 匹配时间点 (如 1015pm)
+    const timeMatch = slug.match(/(\d{3,4}(?:am|pm))/i);
+    const timeAt = timeMatch ? timeMatch[1].toUpperCase() : "";
+
+    return { is15M, price, timeAt };
 };
 
 /**
- * 核心配对算法：支持 15M 市场，确保即便没有完美对冲也显示
+ * 核心配对算法：优先寻找 15M 高频市场
  */
 async function discoverPairs() {
   if (!state.config.engineActive) return;
   
   try {
-    // 增加 Limit 到 500，覆盖所有 15M 市场
-    const markets = await safeFetch(`${GAMMA_API}/markets?category=Crypto&active=true&closed=false&limit=500`);
-    if (!markets) {
-        addLog("无法获取市场数据，请检查网络", "ERROR");
-        return;
-    }
+    // 增加 Limit 并指定排序，确保获取到最新的市场
+    const markets = await safeFetch(`${GAMMA_API}/markets?category=Crypto&active=true&closed=false&limit=500&order=endDate&dir=asc`);
+    if (!markets) return;
     
     state.stats.scannedCount = markets.length;
 
-    // 过滤目标资产，不再排除 15M
     const targets = markets.filter(m => {
         const slug = (m.slug || "").toLowerCase();
         const isTargetAsset = slug.includes('btc') || slug.includes('eth') || slug.includes('sol') || 
                               slug.includes('bitcoin') || slug.includes('ethereum') || slug.includes('solana');
-        return isTargetAsset && m.clobTokenIds;
+        
+        const msLeft = new Date(m.endDate).getTime() - Date.now();
+        const minsLeft = msLeft / (1000 * 60);
+        return isTargetAsset && minsLeft > -5 && minsLeft <= state.config.maxSettleMinutes && m.clobTokenIds;
     });
 
     let newPairs = [];
     const usedMarketIds = new Set();
 
-    // 第一步：寻找真正的互补对 (A市场: Above X, B市场: Below X)
+    // 1. 寻找 15M 互补对
     for (let i = 0; i < targets.length; i++) {
         for (let j = 0; j < targets.length; j++) {
             if (i === j) continue;
             const m1 = targets[i];
             const m2 = targets[j];
-
             if (usedMarketIds.has(m1.id) || usedMarketIds.has(m2.id)) continue;
 
-            // 检查结算时间是否接近 (60秒内)
-            const timeDiff = Math.abs(new Date(m1.endDate).getTime() - new Date(m2.endDate).getTime());
-            if (timeDiff > 60000) continue;
+            const info1 = extractMarketInfo(m1);
+            const info2 = extractMarketInfo(m2);
 
-            const p1 = extractPrice(m1.slug);
-            const p2 = extractPrice(m2.slug);
-            if (!p1 || p1 !== p2) continue;
+            // 必须是同一价格点和同一时间点
+            if (info1.price && info1.price === info2.price && info1.timeAt === info2.timeAt) {
+                const s1 = m1.slug.toLowerCase();
+                const s2 = m2.slug.toLowerCase();
+                const isM1Above = s1.includes('above') || s1.includes('higher');
+                const isM2Below = s2.includes('below') || s2.includes('lower');
+                const isM1Below = s1.includes('below') || s1.includes('lower');
+                const isM2Above = s2.includes('above') || s2.includes('higher');
 
-            const m1Slug = m1.slug.toLowerCase();
-            const m2Slug = m2.slug.toLowerCase();
-            const isM1Above = m1Slug.includes('above') || m1Slug.includes('higher');
-            const isM2Below = m2Slug.includes('below') || m2Slug.includes('lower');
-            const isM1Below = m1Slug.includes('below') || m1Slug.includes('lower');
-            const isM2Above = m2Slug.includes('above') || m2Slug.includes('higher');
+                if ((isM1Above && isM2Below) || (isM1Below && isM2Above)) {
+                    const t1 = parseTokens(m1.clobTokenIds);
+                    const t2 = parseTokens(m2.clobTokenIds);
+                    if (t1 && t2) {
+                        const legA = isM1Above ? m1 : m2;
+                        const legB = isM1Above ? m2 : m1;
+                        const tokA = isM1Above ? t1 : t2;
+                        const tokB = isM1Above ? t2 : t1;
 
-            if ((isM1Above && isM2Below) || (isM1Below && isM2Above)) {
-                const tokens1 = parseTokens(m1.clobTokenIds);
-                const tokens2 = parseTokens(m2.clobTokenIds);
-
-                if (tokens1 && tokens2) {
-                    const legA = isM1Above ? m1 : m2;
-                    const legB = isM1Above ? m2 : m1;
-                    const tA = isM1Above ? tokens1 : tokens2;
-                    const tB = isM1Above ? tokens2 : tokens1;
-
-                    newPairs.push({
-                        id: `${legA.id}-${legB.id}`,
-                        asset: m1Slug.includes('btc') ? 'BTC' : (m1Slug.includes('eth') ? 'ETH' : 'SOL'),
-                        targetPrice: p1,
-                        endDate: legA.endDate,
-                        isInternalPair: false, // 跨市场套利
-                        legA: { id: legA.id, symbol: legA.ticker, yesId: tA[0], price: 0.5 },
-                        legB: { id: legB.id, symbol: legB.ticker, yesId: tB[0], price: 0.5 },
-                        sumYES: 1.0,
-                        status: 'MONITORING'
-                    });
-                    usedMarketIds.add(m1.id);
-                    usedMarketIds.add(m2.id);
+                        newPairs.push({
+                            id: `${legA.id}-${legB.id}`,
+                            asset: s1.includes('btc') ? 'BTC' : (s1.includes('eth') ? 'ETH' : 'SOL'),
+                            targetPrice: info1.price,
+                            timeAt: info1.timeAt,
+                            is15M: info1.is15M,
+                            endDate: legA.endDate,
+                            isInternal: false,
+                            legA: { id: legA.id, symbol: legA.ticker, yesId: tokA[0], price: 0.5 },
+                            legB: { id: legB.id, symbol: legB.ticker, yesId: tokB[0], price: 0.5 },
+                            sumYES: 1.0,
+                            status: 'MONITORING'
+                        });
+                        usedMarketIds.add(m1.id);
+                        usedMarketIds.add(m2.id);
+                    }
                 }
             }
         }
     }
 
-    // 第二步：兜底逻辑 - 如果有 Above 市场但没有对应的 Below 市场，显示该市场的 YES/NO 对
+    // 2. 补全逻辑：显示独立的 15M 市场（YES + NO 镜像）
     targets.forEach(m => {
         if (usedMarketIds.has(m.id)) return;
-        const slug = m.slug.toLowerCase();
-        const p = extractPrice(slug);
-        if (!p) return;
+        const info = extractMarketInfo(m);
+        if (!info.is15M && !m.question.toLowerCase().includes('15 minute')) return;
 
         const tokens = parseTokens(m.clobTokenIds);
         if (tokens && tokens.length >= 2) {
+            const slug = m.slug.toLowerCase();
+            const isAbove = slug.includes('above') || slug.includes('higher');
+            
             newPairs.push({
                 id: `self-${m.id}`,
                 asset: slug.includes('btc') ? 'BTC' : (slug.includes('eth') ? 'ETH' : 'SOL'),
-                targetPrice: p,
+                targetPrice: info.price || "Spot",
+                timeAt: info.timeAt,
+                is15M: true,
                 endDate: m.endDate,
-                isInternalPair: true, // 单市场自对冲（YES + NO 恒等于 1）
+                isInternal: true,
                 legA: { id: m.id, symbol: m.ticker, yesId: tokens[0], price: 0.5 },
-                legB: { id: m.id, symbol: m.ticker, yesId: tokens[1], price: 0.5 }, // 使用 NO token 作为 Below 腿
+                legB: { id: m.id, symbol: m.ticker, yesId: tokens[1], price: 0.5 }, 
                 sumYES: 1.0,
                 status: 'MONITORING'
             });
@@ -182,16 +189,20 @@ async function discoverPairs() {
         }
     });
 
-    if (newPairs.length > 0) {
-        addLog(`配对引擎: 找到 ${targets.length} 个相关资产市场, 已生成 ${newPairs.length} 组监控对`, 'INFO');
-    } else {
-        addLog(`未发现可配对市场 (资产库: ${targets.length})`, 'WARN');
-    }
-    
+    // 排序：15M 优先，且按结束时间从近到远
+    newPairs.sort((a, b) => {
+        if (a.is15M && !b.is15M) return -1;
+        if (!a.is15M && b.is15M) return 1;
+        return new Date(a.endDate).getTime() - new Date(b.endDate).getTime();
+    });
+
     state.pairs = newPairs;
+    if (newPairs.length > 0) {
+        const m15Count = newPairs.filter(p => p.is15M).length;
+        addLog(`刷新完成: 监控中 ${newPairs.length} 组盘口 (其中 ${m15Count} 组为 15M 高频)`, 'INFO');
+    }
   } catch (e) {
-    console.error("Discovery Loop Error:", e);
-    addLog(`扫描异常: ${e.message}`, 'ERROR');
+    console.error("Discovery Error:", e);
   }
 }
 
@@ -214,8 +225,7 @@ async function scanPrices() {
       pair.legB.price = priceB;
       pair.sumYES = priceA + priceB;
 
-      // 只有跨市场套利才会有 sumYES < 1 的可能
-      if (!pair.isInternalPair && pair.sumYES < (1 - state.config.profitThreshold) && pair.status !== 'LOCKED') {
+      if (!pair.isInternal && pair.sumYES < (1 - state.config.profitThreshold) && pair.status !== 'LOCKED') {
         executeArbitrage(pair, 'YES_BASKET', pair.sumYES);
       }
     } catch (e) {}
@@ -228,7 +238,7 @@ function executeArbitrage(pair, type, cost) {
     
     const order = {
         id: `arb-${Date.now()}`,
-        symbol: `${pair.asset} $${pair.targetPrice}`,
+        symbol: `${pair.asset} 15M $${pair.targetPrice}`,
         side: 'YES',
         leg: 1,
         price: cost,
@@ -245,14 +255,13 @@ function executeArbitrage(pair, type, cost) {
     state.stats.balance += profit;
     state.stats.winRate = (state.stats.wonTrades / state.stats.totalTrades) * 100;
     
-    addLog(`[ARB] 利润触发! ${pair.asset} @ ${pair.targetPrice} | 成本: ${cost.toFixed(3)} | 预估利润: $${profit.toFixed(2)}`, 'SUCCESS');
+    addLog(`[ARB] 15M 套利触发! ${pair.asset} @ ${pair.targetPrice} | 盈亏比: ${((1-cost)*100).toFixed(2)}%`, 'SUCCESS');
     
-    setTimeout(() => { pair.status = 'MONITORING'; }, 60000);
+    setTimeout(() => { pair.status = 'MONITORING'; }, 30000); // 15M 市场生命周期短，锁定期缩短至 30s
 }
 
-// 任务循环：更频繁地同步 15M 市场
-setInterval(() => discoverPairs().catch(console.error), 10000);
-setInterval(() => scanPrices().catch(console.error), 1500);
+setInterval(() => discoverPairs().catch(console.error), 8000);
+setInterval(() => scanPrices().catch(console.error), 1200);
 
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -269,46 +278,37 @@ const server = http.createServer((req, res) => {
     const rounds = state.pairs.map(p => ({
         id: p.id,
         asset: p.asset,
-        symbol: `${p.asset} $${p.targetPrice}`,
-        question: p.isInternalPair ? `Internal: ${p.asset} Above ${p.targetPrice}` : `Pair: Above/Below ${p.targetPrice}`,
+        symbol: `${p.asset} Up/Down - 15m`,
+        question: `${p.is15M ? '15M' : 'Pair'}: ${p.asset} @ $${p.targetPrice} ${p.timeAt}`,
         askYes: p.legA.price,
         askNo: p.legB.price,
         sumYES: p.sumYES,
         status: p.status,
-        isInternal: p.isInternalPair,
+        is15M: p.is15M,
+        isInternal: p.isInternal,
         countdown: Math.floor((new Date(p.endDate).getTime() - Date.now())/1000)
     }));
     res.end(JSON.stringify({ ...state, rounds }));
+  } else if (req.url === '/toggle' && req.method === 'POST') {
+    state.config.engineActive = !state.config.engineActive;
+    addLog(`引擎状态已切换: ${state.config.engineActive ? 'RUNNING' : 'STOPPED'}`, 'WARN');
+    if (state.config.engineActive) discoverPairs();
+    res.writeHead(200);
+    res.end('ok');
   } else if (req.url === '/config' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => body += chunk);
-    req.on('end', () => { 
-      try { 
-        state.config = { ...state.config, ...JSON.parse(body) }; 
-        res.writeHead(200);
-        res.end('ok'); 
-      } catch(e) { 
-        res.writeHead(400);
-        res.end('fail'); 
-      }
+    req.on('end', () => {
+      state.config = { ...state.config, ...JSON.parse(body) };
+      res.writeHead(200);
+      res.end('ok');
     });
-  } else if (req.url === '/toggle' && req.method === 'POST') {
-    state.config.engineActive = !state.config.engineActive;
-    if (!state.config.engineActive) {
-      state.pairs = [];
-      addLog(`配对引擎已挂起模式`, 'WARN');
-    } else {
-      addLog(`正在重启深度配对引擎 (扫描 15M/1H 市场)...`, 'SUCCESS');
-      discoverPairs(); // 立即执行一次
-    }
-    res.writeHead(200);
-    res.end('ok');
-  } else { 
+  } else {
     res.writeHead(404);
-    res.end(); 
+    res.end();
   }
 });
 
 server.listen(3001, '0.0.0.0', () => {
-    console.log('PolyEdge Smart Ape Engine v5.4 (15M Optimized) Online');
+    console.log('PolyEdge Smart Ape Engine v5.5 (15M Core) Online');
 });
