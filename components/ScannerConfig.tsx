@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { TradeConfig } from '../types';
 
 interface ScannerConfigProps {
-  config: TradeConfig & { engineActive?: boolean };
+  config: TradeConfig & { engineActive?: boolean, maxSettleMinutes?: number };
   setConfig: React.Dispatch<React.SetStateAction<any>>;
   onSave: () => void;
   onToggle: () => void;
@@ -70,8 +70,8 @@ const ScannerConfig: React.FC<ScannerConfigProps> = ({ config, setConfig, onSave
         </button>
 
         <InputField label="扫描频率" name="scanIntervalMs" value={config.scanIntervalMs} suffix="MS" icon="fa-solid fa-microchip" />
-        <InputField label="异动触发阈值" name="dropThreshold" value={config.dropThreshold} suffix="%" icon="fa-solid fa-bolt" />
-        <InputField label="对冲价格上限" name="sumTarget" value={config.sumTarget} suffix="USD" icon="fa-solid fa-plus-minus" />
+        <InputField label="最大结算周期" name="maxSettleMinutes" value={config.maxSettleMinutes || 1440} suffix="MINS" icon="fa-solid fa-hourglass-half" />
+        <InputField label="获利触发阈值" name="profitThreshold" value={(config as any).profitThreshold || 0.008} suffix="%" icon="fa-solid fa-bolt" />
         <InputField label="单笔下注" name="betAmount" value={config.betAmount} suffix="SHARES" icon="fa-solid fa-coins" />
         
         <div className="pt-4 border-t border-slate-800/50 mt-4">
