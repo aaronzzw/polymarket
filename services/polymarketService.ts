@@ -2,10 +2,38 @@
 const GAMMA_API = 'https://gamma-api.polymarket.com';
 const CLOB_API = 'https://clob.polymarket.com';
 
+// 公共 CORS 代理列表，用于本地预览模式绕过浏览器限制
+const CORS_PROXIES = [
+  'https://corsproxy.io/?',
+  'https://api.allorigins.win/raw?url='
+];
+
+async function fetchWithProxy(url: string) {
+  // 首先尝试直接请求
+  try {
+    const response = await fetch(url);
+    if (response.ok) return await response.json();
+  } catch (e) {
+    console.warn(`Direct fetch failed for ${url}, trying proxy...`);
+  }
+
+  // 尝试代理请求
+  for (const proxy of CORS_PROXIES) {
+    try {
+      const proxiedUrl = `${proxy}${encodeURIComponent(url)}`;
+      const response = await fetch(proxiedUrl);
+      if (response.ok) return await response.json();
+    } catch (e) {
+      console.error(`Proxy ${proxy} failed:`, e);
+    }
+  }
+  throw new Error('All fetch attempts failed');
+}
+
 export const fetchActiveMarkets = async () => {
   try {
-    const response = await fetch(`${GAMMA_API}/markets?active=true&closed=false&limit=15&order=volume24hr&dir=desc`);
-    const data = await response.json();
+    const url = `${GAMMA_API}/markets?active=true&closed=false&limit=15&order=volume24hr&dir=desc`;
+    const data = await fetchWithProxy(url);
     
     return data.filter((m: any) => {
       let tokens = m.clobTokenIds;
@@ -32,8 +60,8 @@ export const fetchActiveMarkets = async () => {
 
 export const fetchTokenPrice = async (tokenId: string) => {
   try {
-    const response = await fetch(`${CLOB_API}/book?token_id=${tokenId}`);
-    const data = await response.json();
+    const url = `${CLOB_API}/book?token_id=${tokenId}`;
+    const data = await fetchWithProxy(url);
     if (data.asks && data.asks.length > 0) {
       return parseFloat(data.asks[0].price);
     }
