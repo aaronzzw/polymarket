@@ -3,25 +3,32 @@ import React, { useState } from 'react';
 import { TradeConfig } from '../types';
 
 interface ScannerConfigProps {
-  config: TradeConfig;
-  setConfig: React.Dispatch<React.SetStateAction<TradeConfig>>;
-  isScanning: boolean;
-  onToggleScan: () => void;
+  config: TradeConfig & { engineActive?: boolean };
+  setConfig: React.Dispatch<React.SetStateAction<any>>;
+  onSave: () => void;
+  onToggle: () => void;
 }
 
-const ScannerConfig: React.FC<ScannerConfigProps> = ({ config, setConfig, isScanning, onToggleScan }) => {
+const ScannerConfig: React.FC<ScannerConfigProps> = ({ config, setConfig, onSave, onToggle }) => {
   const [showKey, setShowKey] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type, checked } = e.target;
-    setConfig(prev => ({
+    setConfig((prev: any) => ({
       ...prev,
       [name]: type === 'checkbox' ? checked : (type === 'number' ? parseFloat(value) || 0 : value)
     }));
   };
 
+  const handleSaveClick = async () => {
+    setIsSaving(true);
+    await onSave();
+    setTimeout(() => setIsSaving(false), 800);
+  };
+
   const InputField = ({ label, name, value, suffix, icon, type = "number" }: { label: string, name: string, value: any, suffix?: string, icon?: string, type?: string }) => (
-    <div className="flex flex-col gap-1 mb-4">
+    <div className="flex flex-col gap-1 mb-3">
       <label className="text-[10px] text-slate-500 uppercase font-black tracking-widest flex items-center gap-2">
         {icon && <i className={`${icon} text-blue-500/50`}></i>}
         {label}
@@ -32,9 +39,9 @@ const ScannerConfig: React.FC<ScannerConfigProps> = ({ config, setConfig, isScan
           name={name}
           value={value}
           onChange={handleChange}
-          className="w-full bg-[#0d1117] border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-all font-mono text-blue-100"
+          className="w-full bg-[#0d1117] border border-slate-800 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-blue-500 transition-all font-mono text-blue-100"
         />
-        {suffix && <span className="absolute right-4 top-3 text-[10px] text-slate-600 font-black italic">{suffix}</span>}
+        {suffix && <span className="absolute right-4 top-2.5 text-[10px] text-slate-600 font-black italic">{suffix}</span>}
       </div>
     </div>
   );
@@ -42,45 +49,54 @@ const ScannerConfig: React.FC<ScannerConfigProps> = ({ config, setConfig, isScan
   return (
     <div className="bg-[#151921] rounded-2xl border border-slate-800 h-full flex flex-col shadow-xl overflow-hidden">
       <div className="p-5 border-b border-slate-800 bg-[#0d1117]/50 flex justify-between items-center">
-        <span className="text-[10px] font-black tracking-widest text-white uppercase italic">核心引擎配置</span>
-        <div className="flex gap-2">
-          <div className="w-2 h-2 rounded-full bg-green-500"></div>
-          <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
+        <span className="text-[10px] font-black tracking-widest text-white uppercase italic">引擎核心控制台</span>
+        <div className="flex items-center gap-3">
+          <div className={`w-2 h-2 rounded-full ${config.engineActive ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
+          <span className="text-[9px] font-black text-slate-500 uppercase">{config.engineActive ? 'Active' : 'Standby'}</span>
         </div>
       </div>
       
       <div className="p-6 flex-grow space-y-2 overflow-y-auto">
-        <InputField label="扫描间隔 (Scanning Speed)" name="scanIntervalMs" value={config.scanIntervalMs} suffix="MS" icon="fa-solid fa-microchip" />
-        <InputField label="快速下跌阈值 (Leg1)" name="dropThreshold" value={config.dropThreshold} suffix="%" icon="fa-solid fa-bolt" />
-        <InputField label="对冲入场总价 (Leg2)" name="sumTarget" value={config.sumTarget} suffix="USD" icon="fa-solid fa-plus-minus" />
-        <InputField label="单边下注数量" name="betAmount" value={config.betAmount} suffix="SHARES" icon="fa-solid fa-coins" />
+        <button 
+          onClick={onToggle}
+          className={`w-full py-4 rounded-xl font-black uppercase tracking-[0.2em] text-xs mb-6 transition-all shadow-lg flex items-center justify-center gap-3 ${
+            config.engineActive 
+            ? 'bg-red-600/20 border border-red-600/50 text-red-500 hover:bg-red-600/30' 
+            : 'bg-blue-600 border border-blue-400 text-white hover:bg-blue-500 shadow-blue-500/20'
+          }`}
+        >
+          <i className={`fa-solid ${config.engineActive ? 'fa-stop' : 'fa-play'}`}></i>
+          {config.engineActive ? '停止扫描引擎' : '启动扫描引擎'}
+        </button>
+
+        <InputField label="扫描频率" name="scanIntervalMs" value={config.scanIntervalMs} suffix="MS" icon="fa-solid fa-microchip" />
+        <InputField label="异动触发阈值" name="dropThreshold" value={config.dropThreshold} suffix="%" icon="fa-solid fa-bolt" />
+        <InputField label="对冲价格上限" name="sumTarget" value={config.sumTarget} suffix="USD" icon="fa-solid fa-plus-minus" />
+        <InputField label="单笔下注" name="betAmount" value={config.betAmount} suffix="SHARES" icon="fa-solid fa-coins" />
         
         <div className="pt-4 border-t border-slate-800/50 mt-4">
-          <span className="text-[10px] font-black text-blue-500 uppercase tracking-widest mb-4 block italic">实盘执行配置 (Private)</span>
-          
+          <InputField label="RPC 节点 (Polygon)" name="rpcUrl" value={(config as any).rpcUrl || ''} suffix="NODE" icon="fa-solid fa-network-wired" type="text" />
           <div className="flex flex-col gap-1 mb-4">
             <label className="text-[10px] text-slate-600 uppercase font-black tracking-widest flex justify-between">
-              <span>账户私钥 (EVM Private Key)</span>
+              <span>账户私钥</span>
               <button onClick={() => setShowKey(!showKey)} className="text-blue-500 hover:underline">{showKey ? '隐藏' : '显示'}</button>
             </label>
             <input 
               type={showKey ? 'text' : 'password'}
               name="privateKey"
-              value={config.privateKey}
+              value={(config as any).privateKey || ''}
               onChange={handleChange}
               placeholder="0x..."
-              className="w-full bg-[#0d1117] border border-slate-800 rounded-xl px-4 py-3 text-xs focus:outline-none focus:border-red-500/50 transition-all font-mono text-red-200"
+              className="w-full bg-[#0d1117] border border-slate-800 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-red-500/50 transition-all font-mono text-red-200"
             />
           </div>
-
-          <InputField label="RPC 节点 (Polygon)" name="rpcUrl" value={config.rpcUrl} suffix="NODE" icon="fa-solid fa-network-wired" type="text" />
         </div>
 
         <div className="pt-2">
           <div className="flex items-center justify-between p-4 bg-[#0d1117] rounded-xl border border-slate-800/50">
             <div className="flex flex-col">
-              <span className="text-[10px] font-black text-slate-300 uppercase">自动执行模式</span>
-              <span className="text-[8px] text-slate-600 font-bold">AUTO-BOT MODE</span>
+              <span className="text-[10px] font-black text-slate-300 uppercase">自动交易</span>
+              <span className="text-[8px] text-slate-600 font-bold uppercase tracking-tighter">BOT EXECUTION</span>
             </div>
             <label className="relative inline-flex items-center cursor-pointer">
               <input type="checkbox" name="autoBet" checked={config.autoBet} onChange={handleChange} className="sr-only peer" />
@@ -90,8 +106,19 @@ const ScannerConfig: React.FC<ScannerConfigProps> = ({ config, setConfig, isScan
         </div>
       </div>
 
-      <div className="p-4 bg-red-950/20 border-t border-red-900/20 text-[8px] text-red-500/70 px-6 font-bold uppercase leading-tight">
-        ⚠️ 警告: 实盘开启后将直接通过 RPC 发送交易，请确保私钥安全及余额充足。目前为模拟记录模式。
+      <div className="p-4 bg-[#0d1117] border-t border-slate-800">
+        <button 
+          onClick={handleSaveClick}
+          disabled={isSaving}
+          className="w-full bg-slate-800 hover:bg-slate-700 text-white py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border border-slate-700 flex items-center justify-center gap-2"
+        >
+          {isSaving ? (
+            <i className="fa-solid fa-circle-notch animate-spin"></i>
+          ) : (
+            <i className="fa-solid fa-floppy-disk text-blue-400"></i>
+          )}
+          {isSaving ? '正在保存...' : '保存并应用配置'}
+        </button>
       </div>
     </div>
   );

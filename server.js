@@ -1,20 +1,20 @@
 
 /**
- * PolyEdge 核心引擎 - Smart Ape 真实策略版
+ * PolyEdge 核心引擎 - Smart Ape 生产版
  * 资产锁定：BTC, ETH, SOL
- * 策略逻辑：只看 Crypto 类别 + 临近结算 + 高流动性
  */
 import http from 'http';
 
 let state = {
   config: {
+    engineActive: false,   // 运行开关
     scanIntervalMs: 2000,
     dropThreshold: 1.2,   
     sumTarget: 0.992,     
     betAmount: 10,
     autoBet: true,
-    maxSettleHours: 24,    // 监控 24 小时内结算
-    minVolume: 500         // 过滤低流动性
+    maxSettleHours: 24,
+    minVolume: 500
   },
   stats: {
     totalTrades: 0,
@@ -42,30 +42,31 @@ function addLog(message, level = 'INFO') {
   };
   state.logs.push(log);
   if (state.logs.length > 50) state.logs.shift();
-  // 只在重要事件（WARN/SUCCESS/ERROR）时输出到后端控制台
-  if (level !== 'INFO') {
-    console.log(`[${log.timestamp}] [${level}] ${message}`);
-  }
+  // 必须在后端终端打印，方便 pm2 logs 查看
+  console.log(`[${log.timestamp}] [${level}] ${message}`);
 }
 
 async function updateMarketData() {
+  if (!state.config.engineActive) return;
+  
   scanCount++;
   try {
     // 1. 指定 API 发现：只抓取 Crypto 类活跃市场
     if (state.rounds.length === 0 || scanCount % 15 === 0) {
+      console.log(`[SYS] 正在请求 Gamma API 发现新市场...`);
       const res = await fetch(`${GAMMA_API}/markets?category=Crypto&active=true&limit=200`);
-      if (!res.ok) throw new Error(`API Fetch Error`);
+      if (!res.ok) throw new Error(`Gamma API 响应错误: ${res.status}`);
       const allMarkets = await res.json();
+      console.log(`[SYS] 获取到 ${allMarkets.length} 个原始市场`);
       
       const filtered = allMarkets.filter(m => {
         const slug = (m.slug || "").toLowerCase();
         const title = (m.question || "").toLowerCase();
         
-        // 严格资产过滤：只扫描 BTC, ETH, SOL
-        const isTargetAsset = /\b(btc|eth|sol|bitcoin|ethereum|solana)\b/.test(slug) || 
-                              /\b(bitcoin|ethereum|solana)\b/i.test(title);
+        // 严格资产过滤：只要包含 btc, eth, sol 即可
+        const isTargetAsset = /btc|eth|sol|bitcoin|ethereum|solana/.test(slug) || 
+                              /bitcoin|ethereum|solana/i.test(title);
         
-        // 时间筛选：24小时内结算
         const msLeft = new Date(m.endDate).getTime() - Date.now();
         const hoursLeft = msLeft / (1000 * 60 * 60);
         const isSoon = hoursLeft > 0 && hoursLeft <= state.config.maxSettleHours;
@@ -78,13 +79,15 @@ async function updateMarketData() {
         return isTargetAsset && isSoon && Array.isArray(tokens) && tokens.length === 2;
       });
 
+      console.log(`[SYS] 过滤后符合条件的 BTC/ETH/SOL 市场数量: ${filtered.length}`);
+
       if (filtered.length > 0) {
         state.rounds = filtered.map(m => {
           let tokens = typeof m.clobTokenIds === 'string' ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
           let asset = 'CRYPTO';
-          if (m.slug.includes('btc')) asset = 'BTC';
-          else if (m.slug.includes('eth')) asset = 'ETH';
-          else if (m.slug.includes('sol')) asset = 'SOL';
+          if (m.slug.includes('btc') || m.slug.includes('bitcoin')) asset = 'BTC';
+          else if (m.slug.includes('eth') || m.slug.includes('ethereum')) asset = 'ETH';
+          else if (m.slug.includes('sol') || m.slug.includes('solana')) asset = 'SOL';
 
           const oldRound = state.rounds.find(r => r.id === m.id);
           const msLeft = new Date(m.endDate).getTime() - Date.now();
@@ -106,7 +109,7 @@ async function updateMarketData() {
           };
         }).sort((a,b) => a.countdown - b.countdown).slice(0, 10);
         
-        if (scanCount === 1) addLog(`Alpha 策略已初始化: 锁定 BTC/ETH/SOL 目标盘口`, 'SUCCESS');
+        if (scanCount <= 15) addLog(`引擎扫描中: 锁定 ${state.rounds.length} 个 BTC/ETH/SOL 活跃盘口`, 'SUCCESS');
       }
     }
 
@@ -134,7 +137,7 @@ async function updateMarketData() {
             round.status = 'HEDGING';
             round.leg1Side = 'YES';
             round.leg1Price = askYes;
-            addLog(`发现错价: ${round.symbol} 波动 ${drop.toFixed(2)}% | 价格: ${askYes}`, 'WARN');
+            addLog(`[ALERT] ${round.symbol} 波动 ${drop.toFixed(2)}% | 现价: ${askYes}`, 'WARN');
           }
         }
 
@@ -149,7 +152,7 @@ async function updateMarketData() {
             state.stats.balance += profit;
             state.stats.winRate = (state.stats.wonTrades / state.stats.totalTrades) * 100;
             round.status = 'LOCKED';
-            addLog(`套利成功: ${round.symbol} 锁定收益 $${profit.toFixed(2)}`, 'SUCCESS');
+            addLog(`[WIN] ${round.symbol} 套利成功 | 预计收益: $${profit.toFixed(2)}`, 'SUCCESS');
             setTimeout(() => { round.status = 'SCANNING'; round.leg1Side = null; }, 60000);
           }
         }
@@ -157,9 +160,13 @@ async function updateMarketData() {
         round.askYes = askYes;
         round.askNo = askNo;
         round.countdown = Math.max(0, round.countdown - 2);
-      } catch (e) {}
+      } catch (e) {
+        // 静默处理单条订单簿报错
+      }
     }));
-  } catch (e) {}
+  } catch (e) {
+    console.error(`[ERROR] 扫描过程崩溃: ${e.message}`);
+  }
 }
 
 function executeOrder(round, side, leg, price) {
@@ -181,6 +188,7 @@ const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.end();
+
   if (req.url === '/sync') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(state));
@@ -188,9 +196,22 @@ const server = http.createServer((req, res) => {
     let b = '';
     req.on('data', c => b += c);
     req.on('end', () => { 
-      try { state.config = { ...state.config, ...JSON.parse(b) }; res.end('ok'); } catch(e) { res.writeHead(400); res.end('fail'); }
+      try { 
+        state.config = { ...state.config, ...JSON.parse(b) }; 
+        addLog(`系统配置已更新并应用`, 'INFO');
+        res.end('ok'); 
+      } catch(e) { res.writeHead(400); res.end('fail'); }
     });
+  } else if (req.url === '/toggle' && req.method === 'POST') {
+    state.config.engineActive = !state.config.engineActive;
+    if (state.config.engineActive) {
+      addLog(`[SYSTEM] 策略引擎已启动`, 'SUCCESS');
+    } else {
+      addLog(`[SYSTEM] 策略引擎已停止`, 'WARN');
+      state.rounds = []; // 停止时清空，防止旧数据残留
+    }
+    res.end('ok');
   } else { res.writeHead(404); res.end(); }
 });
 
-server.listen(3001, '0.0.0.0', () => console.log('PolyEdge Alpha Engine Running...'));
+server.listen(3001, '0.0.0.0', () => console.log('PolyEdge Alpha Engine Running on Port 3001'));
