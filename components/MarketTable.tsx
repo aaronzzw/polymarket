@@ -25,8 +25,8 @@ const MarketTable: React.FC<MarketTableProps> = ({ rounds, sumTarget }) => {
           <thead className="sticky top-0 bg-[#151921] z-10">
             <tr className="bg-[#0d1117]/50 text-[9px] text-slate-500 font-black uppercase tracking-widest border-b border-slate-800/50">
               <th className="px-6 py-4">对冲资产</th>
-              <th className="px-6 py-4">UP ASK</th>
-              <th className="px-6 py-4">DOWN ASK</th>
+              <th className="px-6 py-4">YES ASK</th>
+              <th className="px-6 py-4">NO ASK</th>
               <th className="px-6 py-4">当前对冲总成本</th>
               <th className="px-6 py-4">状态</th>
               <th className="px-6 py-4">倒计时</th>
@@ -34,12 +34,14 @@ const MarketTable: React.FC<MarketTableProps> = ({ rounds, sumTarget }) => {
           </thead>
           <tbody className="divide-y divide-slate-800/30">
             {rounds.map((r) => {
-              let totalCost = r.askUp + r.askDown;
+              // Fix: Use askYes and askNo properties from ArbitrageRound type
+              let totalCost = r.askYes + r.askNo;
               let isLocked = r.status === 'LOCKED';
               let isHedging = r.status === 'HEDGING';
 
               if (isHedging && r.leg1Price !== null) {
-                const otherPrice = r.leg1Side === 'UP' ? r.askDown : r.askUp;
+                // Fix: Compare against 'YES' and handle the logic correctly
+                const otherPrice = r.leg1Side === 'YES' ? r.askNo : r.askYes;
                 totalCost = r.leg1Price + otherPrice;
               }
 
@@ -56,10 +58,12 @@ const MarketTable: React.FC<MarketTableProps> = ({ rounds, sumTarget }) => {
                     </div>
                   </td>
                   <td className="px-6 py-5 font-mono text-xs text-slate-400">
-                    {isLocked ? <span className="text-slate-700">--</span> : `$${r.askUp.toFixed(3)}`}
+                    {/* Fix: Use askYes instead of askUp */}
+                    {isLocked ? <span className="text-slate-700">--</span> : `$${r.askYes.toFixed(3)}`}
                   </td>
                   <td className="px-6 py-5 font-mono text-xs text-slate-400">
-                    {isLocked ? <span className="text-slate-700">--</span> : `$${r.askDown.toFixed(3)}`}
+                    {/* Fix: Use askNo instead of askDown */}
+                    {isLocked ? <span className="text-slate-700">--</span> : `$${r.askNo.toFixed(3)}`}
                   </td>
                   <td className="px-6 py-5">
                      <div className="flex flex-col gap-1">

@@ -20,7 +20,7 @@ export interface Order {
   id: string;
   roundId: string;
   symbol: string;
-  side: 'UP' | 'DOWN';
+  side: 'YES' | 'NO';
   leg: 1 | 2;
   price: number;
   amount: number;
@@ -31,17 +31,20 @@ export interface Order {
 
 export interface ArbitrageRound {
   id: string;
-  symbol: string;
-  askUp: number; 
-  askDown: number; 
-  historyUp: number[];
-  historyDown: number[];
+  symbol: string; // 市场名称
+  question: string;
+  yesTokenId: string;
+  noTokenId: string;
+  askYes: number; 
+  askNo: number; 
+  historyYes: number[];
+  historyNo: number[];
   countdown: number;
-  leg1Side: 'UP' | 'DOWN' | null;
+  leg1Side: 'YES' | 'NO' | null;
   leg1Price: number | null;
   leg2Done: boolean;
   status: 'SCANNING' | 'HEDGING' | 'LOCKED' | 'SETTLED';
-  resetTimer?: number; // 新增：锁定利润后的重置倒计时（秒）
+  resetTimer?: number;
 }
 
 export interface DashboardStats {

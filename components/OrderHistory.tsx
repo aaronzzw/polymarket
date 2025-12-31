@@ -36,7 +36,8 @@ const OrderHistory: React.FC<OrderHistoryProps> = ({ orders }) => {
                 <td className="px-6 py-3 font-black text-slate-300">{o.symbol}</td>
                 <td className="px-6 py-3">
                    <div className="flex gap-2 items-center">
-                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-black ${o.side === 'UP' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}`}>
+                      {/* Fix: Use 'YES' instead of 'UP' to match type definition */}
+                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-black ${o.side === 'YES' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}`}>
                         {o.side}
                       </span>
                       <span className="text-slate-600 font-bold">LEG {o.leg}</span>
