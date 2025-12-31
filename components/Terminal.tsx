@@ -8,24 +8,33 @@ interface TerminalProps {
 
 const Terminal: React.FC<TerminalProps> = ({ logs }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
-  const [isUserScrolling, setIsUserScrolling] = useState(false);
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const lastLogsLength = useRef(0);
 
-  // 核心逻辑：只有当用户没在往上翻时，才自动滚动到底部
+  // 核心逻辑：监听日志变化
   useEffect(() => {
-    if (terminalRef.current && !isUserScrolling) {
-      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-    }
-  }, [logs, isUserScrolling]);
-
-  const handleScroll = () => {
     if (!terminalRef.current) return;
+
+    // 如果日志增加了，且用户处于自动滚动模式，强制滚到底部
+    if (logs.length !== lastLogsLength.current) {
+      if (shouldAutoScroll) {
+        terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+      }
+      lastLogsLength.current = logs.length;
+    }
+  }, [logs, shouldAutoScroll]);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    const isAtBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 15;
     
-    const { scrollTop, scrollHeight, clientHeight } = terminalRef.current;
-    // 判断是否距离底部超过 50px
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
-    
-    // 如果用户不在底部，则标记为“正在手动滚动”，停止自动追踪
-    setIsUserScrolling(!isAtBottom);
+    // 如果用户滑到了最底部，重新激活自动滚动
+    if (isAtBottom) {
+      if (!shouldAutoScroll) setShouldAutoScroll(true);
+    } else {
+      // 只要离开底部，立刻锁定，不再回弹
+      if (shouldAutoScroll) setShouldAutoScroll(false);
+    }
   };
 
   const getLevelStyle = (level: string) => {
@@ -43,15 +52,17 @@ const Terminal: React.FC<TerminalProps> = ({ logs }) => {
         <div className="flex items-center gap-2">
           <i className="fa-solid fa-terminal text-blue-500"></i>
           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">引擎监控终端</span>
-          {isUserScrolling && (
-             <span className="text-[8px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded animate-pulse">
-               自动滚动已暂停 (查看历史中)
+          {!shouldAutoScroll && (
+             <span className="text-[8px] bg-yellow-500/20 text-yellow-500 border border-yellow-500/20 px-2 py-0.5 rounded animate-pulse">
+               历史查看模式 (自动滚动已锁定)
              </span>
           )}
         </div>
         <div className="flex gap-4 text-[9px] font-bold text-slate-600">
            <span>LOGS: {logs.length}</span>
-           <span className="text-green-600">SYNC_OK</span>
+           <span className={shouldAutoScroll ? "text-green-600" : "text-yellow-600"}>
+             {shouldAutoScroll ? "LIVE_TRACKING" : "PAUSED"}
+           </span>
         </div>
       </div>
       
@@ -73,16 +84,21 @@ const Terminal: React.FC<TerminalProps> = ({ logs }) => {
       </div>
 
       <div className="p-2 bg-[#0d1117] border-t border-slate-800 flex justify-center relative">
-         {isUserScrolling && (
+         {!shouldAutoScroll && (
             <button 
-              onClick={() => setIsUserScrolling(false)}
-              className="absolute -top-10 bg-blue-600 hover:bg-blue-500 text-white text-[10px] px-4 py-1.5 rounded-full shadow-lg font-black uppercase tracking-tighter"
+              onClick={() => {
+                if (terminalRef.current) {
+                  terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+                  setShouldAutoScroll(true);
+                }
+              }}
+              className="absolute -top-12 bg-blue-600 hover:bg-blue-500 text-white text-[10px] px-6 py-2 rounded-full shadow-2xl font-black uppercase tracking-widest border border-blue-400/50 flex items-center gap-2"
             >
-              返回底部 <i className="fa-solid fa-arrow-down ml-1"></i>
+              <i className="fa-solid fa-arrow-down"></i> 恢复实时追踪
             </button>
          )}
          <div className="h-1 w-24 bg-slate-800 rounded-full overflow-hidden">
-            <div className="h-full bg-blue-500 animate-progress"></div>
+            <div className={`h-full bg-blue-500 ${shouldAutoScroll ? 'animate-progress' : ''}`}></div>
          </div>
       </div>
     </div>
