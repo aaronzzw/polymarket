@@ -8,25 +8,22 @@ import OrderHistory from './components/OrderHistory';
 
 const App: React.FC = () => {
   const [isServerActive, setIsServerActive] = useState(false);
-  const [activeTab, setActiveTab] = useState('All Pairs');
   const syncTimer = useRef<number | null>(null);
   
-  // 改进的后端地址检测
   const getBackendUrl = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
     const hostname = window.location.hostname || 'localhost';
-    // 注意：如果是云端预览，可能需要特殊的端口映射处理，这里默认本地 3001
     return `${protocol}//${hostname}:3001`;
   }, []);
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [stats, setStats] = useState<DashboardStats>({
-    totalTrades: 0, wonTrades: 0, totalVolume: 0, netProfit: 0, balance: 5000, winRate: 0
+  const [stats, setStats] = useState<any>({
+    totalTrades: 0, wonTrades: 0, totalVolume: 0, netProfit: 0, balance: 5000, winRate: 0, scannedCount: 0
   });
   const [rounds, setRounds] = useState<any[]>([]);
   const [config, setConfig] = useState<any>({
-    engineActive: false, scanIntervalMs: 2000, profitThreshold: 0.008, betAmount: 10, autoBet: true
+    engineActive: false, scanIntervalMs: 2000, profitThreshold: 0.008, betAmount: 10, autoBet: true, maxSettleMinutes: 1440
   });
 
   const syncWithServer = useCallback(async () => {
@@ -55,15 +52,12 @@ const App: React.FC = () => {
 
   const saveConfig = async () => {
     try {
-      const res = await fetch(`${getBackendUrl()}/config`, {
+      await fetch(`${getBackendUrl()}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config)
       });
-      if (res.ok) await syncWithServer();
-    } catch (e) {
-      console.error("Failed to save config", e);
-    }
+    } catch (e) {}
   };
 
   const toggleEngine = async () => {
@@ -72,14 +66,9 @@ const App: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
-      if (res.ok) {
-        await syncWithServer();
-      } else {
-        throw new Error(`Server responded with ${res.status}`);
-      }
+      if (res.ok) await syncWithServer();
     } catch (e) {
-      console.error("Failed to toggle engine:", e);
-      alert("无法连接到后端引擎，请确保 server.js 正在运行且端口 3001 已开放。");
+      alert("无法切换引擎状态，请检查后端服务。");
     }
   };
 
@@ -103,12 +92,16 @@ const App: React.FC = () => {
            </div>
            <div className="hidden lg:flex gap-6 text-[10px] font-black uppercase tracking-widest text-slate-500">
              <span className="text-white border-b-2 border-blue-500 pb-4 mt-4">Smart Ape Pair Monitor</span>
-             <span className="hover:text-white cursor-pointer transition-colors opacity-50">v5.2.0-STABLE</span>
+             <span className="hover:text-white cursor-pointer transition-colors opacity-50">v5.3.0 (Asset Pairing Mode)</span>
            </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-6">
+           <div className="flex items-center gap-2">
+              <span className="text-[9px] font-black text-slate-600 uppercase">Scanned Markets:</span>
+              <span className="text-[10px] font-mono text-blue-400 font-bold">{stats.scannedCount || 0}</span>
+           </div>
            <div className={`flex items-center gap-2 px-3 py-1 rounded-full border transition-all ${isServerActive ? 'border-green-500/30 bg-green-500/10' : 'border-red-500/30 bg-red-500/10'}`}>
-              <div className={`w-1.5 h-1.5 rounded-full ${isServerActive ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
+              <div className={`w-1.5 h-1.5 rounded-full ${isServerActive ? (config.engineActive ? 'bg-green-500 animate-pulse' : 'bg-yellow-500') : 'bg-red-500'}`}></div>
               <span className={`text-[9px] font-black uppercase ${isServerActive ? 'text-green-400' : 'text-red-400'}`}>
                 {isServerActive ? (config.engineActive ? 'Engine Active' : 'Standby') : 'Engine Offline'}
               </span>
@@ -128,61 +121,70 @@ const App: React.FC = () => {
             {!isServerActive && (
               <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-6 text-center">
                  <i className="fa-solid fa-triangle-exclamation text-red-500 text-3xl mb-3"></i>
-                 <h2 className="text-red-500 font-black uppercase tracking-widest">后端连接断开</h2>
-                 <p className="text-slate-400 text-xs mt-2 font-mono">无法连接到 {getBackendUrl()}。请检查服务端是否运行并处于可访问状态。</p>
+                 <h2 className="text-red-500 font-black uppercase tracking-widest">后端引擎未就绪</h2>
+                 <p className="text-slate-400 text-xs mt-2 font-mono">请确保 `node server.js` 正在运行。监听端口: 3001</p>
               </div>
             )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {rounds.length === 0 && isServerActive ? (
-                <div className="col-span-2 h-64 border-2 border-dashed border-slate-800 rounded-3xl flex flex-col items-center justify-center bg-[#151921]/30">
-                  <i className="fa-solid fa-magnifying-glass-chart text-4xl mb-4 text-slate-700"></i>
-                  <p className="text-xs font-black uppercase tracking-widest text-slate-500">
-                    {config.engineActive ? '正在深度配对资产套利对 (BTC/ETH/SOL)...' : '引擎已停止，点击左侧按钮启动扫描'}
-                  </p>
+                <div className="col-span-2 h-64 border-2 border-dashed border-slate-800 rounded-3xl flex flex-col items-center justify-center bg-[#151921]/30 p-12 text-center">
+                  <i className="fa-solid fa-radar text-4xl mb-4 text-slate-700 animate-pulse"></i>
+                  <p className="text-sm font-black uppercase tracking-[0.2em] text-slate-500 mb-2">正在深度匹配 BTC/ETH/SOL 互补市场...</p>
+                  <p className="text-[10px] text-slate-600 max-w-sm leading-relaxed font-bold">引擎会持续扫描 Gamma API 寻找同一价格锚点的 Above/Below 市场。如果没有显示，可能是当前无此类活动市场或已超过结算时间窗口。</p>
                 </div>
               ) : (
-                rounds.map((r: any) => (
-                  <div key={r.id} className={`bg-[#151921] rounded-2xl border p-6 transition-all relative overflow-hidden ${
-                    r.sumYES < (1 - config.profitThreshold) ? 'border-green-500/50 shadow-2xl shadow-green-500/10 bg-[#1a2521]' : 'border-slate-800'
-                  }`}>
-                    <div className="flex justify-between items-start mb-6">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-[#0d1117] rounded-lg border border-slate-800 flex items-center justify-center">
-                          <i className={`fa-brands ${r.asset === 'BTC' ? 'fa-bitcoin text-orange-500' : (r.asset === 'ETH' ? 'fa-ethereum text-indigo-400' : 'fa-solid fa-s text-green-500')} text-xl`}></i>
+                rounds.map((r: any) => {
+                  const isArb = r.sumYES < (1 - config.profitThreshold);
+                  return (
+                    <div key={r.id} className={`bg-[#151921] rounded-2xl border p-6 transition-all relative overflow-hidden group ${
+                      isArb ? 'border-green-500/50 shadow-2xl shadow-green-500/10 bg-[#1a2521]' : 'border-slate-800 hover:border-slate-700'
+                    }`}>
+                      <div className="flex justify-between items-start mb-6">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-10 h-10 rounded-lg border flex items-center justify-center transition-colors ${isArb ? 'bg-green-500/20 border-green-500/30' : 'bg-[#0d1117] border-slate-800'}`}>
+                            <i className={`fa-brands ${r.asset === 'BTC' ? 'fa-bitcoin text-orange-500' : (r.asset === 'ETH' ? 'fa-ethereum text-indigo-400' : 'fa-solid fa-s text-green-500')} text-xl`}></i>
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-black text-white group-hover:text-blue-400 transition-colors">{r.symbol}</h3>
+                            <span className="text-[10px] text-slate-500 font-bold uppercase">{r.countdown > 0 ? `T-Minus ${Math.floor(r.countdown/3600)}h` : 'Settling'}</span>
+                          </div>
                         </div>
-                        <div>
-                          <h3 className="text-sm font-black text-white">{r.symbol}</h3>
-                          <span className="text-[10px] text-slate-500 font-bold uppercase">{r.countdown > 0 ? `T-Minus ${Math.floor(r.countdown/3600)}h` : 'Settling'}</span>
+                        <div className="text-right">
+                          <div className={`text-2xl font-black transition-colors ${isArb ? 'text-green-400 animate-pulse' : 'text-slate-500'}`}>
+                            {(r.sumYES * 100).toFixed(2)}%
+                          </div>
+                          <div className="text-[8px] font-black text-slate-600 uppercase tracking-widest">Total Probability</div>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <div className={`text-xl font-black ${(r.sumYES < (1 - config.profitThreshold)) ? 'text-green-400 animate-pulse' : 'text-slate-400'}`}>
-                          {(r.sumYES * 100).toFixed(2)}%
-                        </div>
-                        <div className="text-[8px] font-black text-slate-600 uppercase tracking-tighter">Combined Odds</div>
-                      </div>
-                    </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-[#0d1117] p-3 rounded-xl border border-slate-800/50">
-                        <div className="text-[9px] text-slate-500 font-black uppercase mb-1">Leg A (Above)</div>
-                        <div className="text-lg font-mono font-bold text-white">${r.askYes.toFixed(3)}</div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-[#0d1117] p-3 rounded-xl border border-slate-800/50">
+                          <div className="text-[9px] text-slate-500 font-black uppercase mb-1">Leg A (Above)</div>
+                          <div className="text-lg font-mono font-bold text-blue-100">${r.askYes.toFixed(3)}</div>
+                        </div>
+                        <div className="bg-[#0d1117] p-3 rounded-xl border border-slate-800/50">
+                          <div className="text-[9px] text-slate-500 font-black uppercase mb-1">Leg B (Below)</div>
+                          <div className="text-lg font-mono font-bold text-blue-100">${r.askNo.toFixed(3)}</div>
+                        </div>
                       </div>
-                      <div className="bg-[#0d1117] p-3 rounded-xl border border-slate-800/50">
-                        <div className="text-[9px] text-slate-500 font-black uppercase mb-1">Leg B (Below)</div>
-                        <div className="text-lg font-mono font-bold text-white">${r.askNo.toFixed(3)}</div>
-                      </div>
-                    </div>
 
-                    {r.sumYES < (1 - config.profitThreshold) && (
-                      <div className="mt-4 bg-green-500/10 border border-green-500/20 rounded-lg p-2 flex items-center justify-center gap-2">
-                        <i className="fa-solid fa-triangle-exclamation text-green-400 text-[10px]"></i>
-                        <span className="text-[10px] text-green-400 font-black uppercase tracking-widest">Arbitrage Detected: {((1-r.sumYES)*100).toFixed(2)}% P&L</span>
+                      <div className="mt-4 flex items-center justify-between text-[10px] font-black uppercase tracking-widest">
+                         <span className="text-slate-600">Deviation</span>
+                         <span className={isArb ? 'text-green-400' : 'text-slate-400'}>
+                            {((1 - r.sumYES) * 100).toFixed(2)}%
+                         </span>
                       </div>
-                    )}
-                  </div>
-                ))
+
+                      {isArb && (
+                        <div className="mt-4 bg-green-500/20 border border-green-500/30 rounded-lg p-2.5 flex items-center justify-center gap-3">
+                          <i className="fa-solid fa-fire-flame-curved text-green-400 text-xs animate-bounce"></i>
+                          <span className="text-[10px] text-green-400 font-black uppercase tracking-widest">Arbitrage Detected: Profit Potential</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
 
