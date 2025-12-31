@@ -1,20 +1,18 @@
 
 /**
- * PolyEdge 核心引擎 - Smart Ape 生产版
- * 资产锁定：BTC, ETH, SOL
+ * PolyEdge Arbitrage Core - "Smart Ape" Pair Logic
+ * 专门扫描互补市场 (Above vs Below)
+ * 修复了解析崩溃和连接不稳定的问题
  */
 import http from 'http';
 
 let state = {
   config: {
-    engineActive: false,   // 运行开关
+    engineActive: false,
     scanIntervalMs: 2000,
-    dropThreshold: 1.2,   
-    sumTarget: 0.992,     
+    profitThreshold: 0.008, 
     betAmount: 10,
-    autoBet: true,
-    maxSettleHours: 24,
-    minVolume: 500
+    autoBet: true
   },
   stats: {
     totalTrades: 0,
@@ -24,12 +22,11 @@ let state = {
     balance: 5000,
     winRate: 0
   },
-  rounds: [],
+  pairs: [],
   logs: [],
   orders: []
 };
 
-let scanCount = 0;
 const GAMMA_API = 'https://gamma-api.polymarket.com';
 const CLOB_API = 'https://clob.polymarket.com';
 
@@ -42,176 +39,209 @@ function addLog(message, level = 'INFO') {
   };
   state.logs.push(log);
   if (state.logs.length > 50) state.logs.shift();
-  // 必须在后端终端打印，方便 pm2 logs 查看
   console.log(`[${log.timestamp}] [${level}] ${message}`);
 }
 
-async function updateMarketData() {
+async function safeFetch(url, options = {}) {
+    try {
+        const res = await fetch(url, { ...options, signal: AbortSignal.timeout(5000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+    } catch (e) {
+        // 降低非关键错误的日志频率
+        return null;
+    }
+}
+
+function parseTokens(tokenIds) {
+    if (!tokenIds) return null;
+    if (Array.isArray(tokenIds)) return tokenIds;
+    try {
+        return JSON.parse(tokenIds);
+    } catch (e) {
+        return null;
+    }
+}
+
+async function discoverPairs() {
   if (!state.config.engineActive) return;
   
-  scanCount++;
   try {
-    // 1. 指定 API 发现：只抓取 Crypto 类活跃市场
-    if (state.rounds.length === 0 || scanCount % 15 === 0) {
-      console.log(`[SYS] 正在请求 Gamma API 发现新市场...`);
-      const res = await fetch(`${GAMMA_API}/markets?category=Crypto&active=true&limit=200`);
-      if (!res.ok) throw new Error(`Gamma API 响应错误: ${res.status}`);
-      const allMarkets = await res.json();
-      console.log(`[SYS] 获取到 ${allMarkets.length} 个原始市场`);
-      
-      const filtered = allMarkets.filter(m => {
+    const markets = await safeFetch(`${GAMMA_API}/markets?category=Crypto&active=true&limit=100`);
+    if (!markets) return;
+    
+    const targets = markets.filter(m => {
         const slug = (m.slug || "").toLowerCase();
-        const title = (m.question || "").toLowerCase();
-        
-        // 严格资产过滤：只要包含 btc, eth, sol 即可
-        const isTargetAsset = /btc|eth|sol|bitcoin|ethereum|solana/.test(slug) || 
-                              /bitcoin|ethereum|solana/i.test(title);
-        
-        const msLeft = new Date(m.endDate).getTime() - Date.now();
-        const hoursLeft = msLeft / (1000 * 60 * 60);
-        const isSoon = hoursLeft > 0 && hoursLeft <= state.config.maxSettleHours;
+        return (slug.includes('btc') || slug.includes('eth') || slug.includes('sol')) && m.clobTokenIds;
+    });
 
-        let tokens = m.clobTokenIds;
-        if (typeof tokens === 'string') {
-          try { tokens = JSON.parse(tokens); } catch(e) { return false; }
+    let newPairs = [];
+    const processedIds = new Set();
+
+    for (let i = 0; i < targets.length; i++) {
+        for (let j = i + 1; j < targets.length; j++) {
+            const m1 = targets[i];
+            const m2 = targets[j];
+
+            if (processedIds.has(m1.id) || processedIds.has(m2.id)) continue;
+
+            // 匹配条件：结束时间、资产类型一致，且描述方向相反
+            const isSameTime = m1.endDate === m2.endDate;
+            const m1Slug = m1.slug.toLowerCase();
+            const m2Slug = m2.slug.toLowerCase();
+            
+            // 提取价格锚点数字
+            const m1Nums = m1Slug.match(/\d+/g)?.join('');
+            const m2Nums = m2Slug.match(/\d+/g)?.join('');
+
+            const isSameAsset = (m1Slug.includes('btc') && m2Slug.includes('btc')) ||
+                                (m1Slug.includes('eth') && m2Slug.includes('eth')) ||
+                                (m1Slug.includes('sol') && m2Slug.includes('sol'));
+
+            const isOpposite = (m1Slug.includes('above') && m2Slug.includes('below')) ||
+                               (m1Slug.includes('higher') && m2Slug.includes('lower'));
+
+            if (isSameTime && isSameAsset && m1Nums === m2Nums && isOpposite) {
+                const p1Tokens = parseTokens(m1.clobTokenIds);
+                const p2Tokens = parseTokens(m2.clobTokenIds);
+
+                if (p1Tokens && p2Tokens) {
+                    newPairs.push({
+                        id: `${m1.id}-${m2.id}`,
+                        asset: m1Slug.includes('btc') ? 'BTC' : (m1Slug.includes('eth') ? 'ETH' : 'SOL'),
+                        targetPrice: m1Nums,
+                        endDate: m1.endDate,
+                        legA: { id: m1.id, symbol: m1.ticker, yesId: p1Tokens[0], noId: p1Tokens[1], price: 0.5 },
+                        legB: { id: m2.id, symbol: m2.ticker, yesId: p2Tokens[0], noId: p2Tokens[1], price: 0.5 },
+                        sumYES: 1.0,
+                        status: 'MONITORING'
+                    });
+                    processedIds.add(m1.id);
+                    processedIds.add(m2.id);
+                }
+            }
         }
-        
-        return isTargetAsset && isSoon && Array.isArray(tokens) && tokens.length === 2;
-      });
-
-      console.log(`[SYS] 过滤后符合条件的 BTC/ETH/SOL 市场数量: ${filtered.length}`);
-
-      if (filtered.length > 0) {
-        state.rounds = filtered.map(m => {
-          let tokens = typeof m.clobTokenIds === 'string' ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
-          let asset = 'CRYPTO';
-          if (m.slug.includes('btc') || m.slug.includes('bitcoin')) asset = 'BTC';
-          else if (m.slug.includes('eth') || m.slug.includes('ethereum')) asset = 'ETH';
-          else if (m.slug.includes('sol') || m.slug.includes('solana')) asset = 'SOL';
-
-          const oldRound = state.rounds.find(r => r.id === m.id);
-          const msLeft = new Date(m.endDate).getTime() - Date.now();
-
-          return {
-            id: m.id,
-            asset,
-            symbol: m.ticker || m.slug.split('-').slice(0, 3).join(' ').toUpperCase(),
-            question: m.question,
-            yesTokenId: tokens[0],
-            noTokenId: tokens[1],
-            askYes: oldRound?.askYes || 0.5,
-            askNo: oldRound?.askNo || 0.5,
-            historyYes: oldRound?.historyYes || [],
-            status: oldRound?.status || 'SCANNING',
-            leg1Side: oldRound?.leg1Side || null,
-            leg1Price: oldRound?.leg1Price || null,
-            countdown: Math.floor(msLeft / 1000)
-          };
-        }).sort((a,b) => a.countdown - b.countdown).slice(0, 10);
-        
-        if (scanCount <= 15) addLog(`引擎扫描中: 锁定 ${state.rounds.length} 个 BTC/ETH/SOL 活跃盘口`, 'SUCCESS');
-      }
     }
 
-    // 2. 价格偏差实时扫描
-    await Promise.all(state.rounds.map(async (round) => {
-      try {
-        const [y, n] = await Promise.all([
-          fetch(`${CLOB_API}/book?token_id=${round.yesTokenId}`),
-          fetch(`${CLOB_API}/book?token_id=${round.noTokenId}`)
-        ]);
-        const yData = await y.json();
-        const nData = await n.json();
-
-        const askYes = yData.asks?.[0]?.price ? parseFloat(yData.asks[0].price) : round.askYes;
-        const askNo = nData.asks?.[0]?.price ? parseFloat(nData.asks[0].price) : round.askNo;
-
-        round.historyYes.push(askYes);
-        if (round.historyYes.length > 25) round.historyYes.shift();
-        
-        if (round.status === 'SCANNING' && state.config.autoBet) {
-          const prev = round.historyYes[round.historyYes.length - 2] || askYes;
-          const drop = ((prev - askYes) / prev) * 100;
-          if (drop >= state.config.dropThreshold && askYes > 0.05 && askYes < 0.95) {
-            executeOrder(round, 'YES', 1, askYes);
-            round.status = 'HEDGING';
-            round.leg1Side = 'YES';
-            round.leg1Price = askYes;
-            addLog(`[ALERT] ${round.symbol} 波动 ${drop.toFixed(2)}% | 现价: ${askYes}`, 'WARN');
-          }
-        }
-
-        if (round.status === 'HEDGING' && state.config.autoBet) {
-          const sum = round.leg1Price + askNo;
-          if (sum <= state.config.sumTarget) {
-            executeOrder(round, 'NO', 2, askNo);
-            const profit = (1 - sum) * state.config.betAmount;
-            state.stats.totalTrades++;
-            state.stats.wonTrades++;
-            state.stats.netProfit += profit;
-            state.stats.balance += profit;
-            state.stats.winRate = (state.stats.wonTrades / state.stats.totalTrades) * 100;
-            round.status = 'LOCKED';
-            addLog(`[WIN] ${round.symbol} 套利成功 | 预计收益: $${profit.toFixed(2)}`, 'SUCCESS');
-            setTimeout(() => { round.status = 'SCANNING'; round.leg1Side = null; }, 60000);
-          }
-        }
-
-        round.askYes = askYes;
-        round.askNo = askNo;
-        round.countdown = Math.max(0, round.countdown - 2);
-      } catch (e) {
-        // 静默处理单条订单簿报错
-      }
-    }));
+    if (newPairs.length > 0 && state.pairs.length === 0) {
+        addLog(`配对引擎成功发现 ${newPairs.length} 组资产套利对`, 'SUCCESS');
+    }
+    state.pairs = newPairs;
   } catch (e) {
-    console.error(`[ERROR] 扫描过程崩溃: ${e.message}`);
+    console.error("Discovery Loop Error:", e);
   }
 }
 
-function executeOrder(round, side, leg, price) {
-  const order = {
-    id: `tx-${Date.now()}-${Math.floor(Math.random()*1000)}`,
-    symbol: round.symbol,
-    side, leg, price, amount: state.config.betAmount,
-    status: 'FILLED', timestamp: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
-    txHash: '0x' + Math.random().toString(16).substr(2, 32)
-  };
-  state.orders.unshift(order);
-  if (state.orders.length > 50) state.orders.pop();
+async function scanPrices() {
+  if (!state.config.engineActive || state.pairs.length === 0) return;
+
+  await Promise.all(state.pairs.map(async (pair) => {
+    try {
+      const dataA = await safeFetch(`${CLOB_API}/book?token_id=${pair.legA.yesId}`);
+      const dataB = await safeFetch(`${CLOB_API}/book?token_id=${pair.legB.yesId}`);
+
+      if (!dataA || !dataB) return;
+
+      const priceA = dataA.asks?.[0]?.price ? parseFloat(dataA.asks[0].price) : pair.legA.price;
+      const priceB = dataB.asks?.[0]?.price ? parseFloat(dataB.asks[0].price) : pair.legB.price;
+
+      pair.legA.price = priceA;
+      pair.legB.price = priceB;
+      pair.sumYES = priceA + priceB;
+
+      // 发现套利机会
+      if (pair.sumYES < (1 - state.config.profitThreshold) && pair.status !== 'LOCKED') {
+        executeArbitrage(pair, 'YES_BASKET', pair.sumYES);
+      }
+    } catch (e) {}
+  }));
 }
 
-setInterval(updateMarketData, state.config.scanIntervalMs);
+function executeArbitrage(pair, type, cost) {
+    const profit = (1 - cost) * state.config.betAmount;
+    pair.status = 'LOCKED';
+    
+    const order = {
+        id: `arb-${Date.now()}`,
+        symbol: `${pair.asset} Arbitrage`,
+        side: 'YES',
+        leg: 1,
+        price: cost,
+        amount: state.config.betAmount,
+        status: 'FILLED',
+        timestamp: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+        txHash: '0x' + Math.random().toString(16).substr(2, 32)
+    };
+    
+    state.orders.unshift(order);
+    state.stats.totalTrades++;
+    state.stats.wonTrades++;
+    state.stats.netProfit += profit;
+    state.stats.balance += profit;
+    state.stats.winRate = (state.stats.wonTrades / state.stats.totalTrades) * 100;
+    
+    addLog(`[ARB] 触发对冲: ${pair.asset} | 成本: ${cost.toFixed(3)} | 利润: $${profit.toFixed(2)}`, 'SUCCESS');
+    
+    setTimeout(() => { pair.status = 'MONITORING'; }, 60000);
+}
+
+// 启动循环任务
+setInterval(() => discoverPairs().catch(console.error), 15000);
+setInterval(() => scanPrices().catch(console.error), 2000);
 
 const server = http.createServer((req, res) => {
+  // 强化 CORS 处理
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.end();
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    return res.end();
+  }
 
   if (req.url === '/sync') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(state));
+    const rounds = state.pairs.map(p => ({
+        id: p.id,
+        asset: p.asset,
+        symbol: `${p.asset} @ ${p.targetPrice}`,
+        question: `Price Arbitrage Pairing`,
+        askYes: p.legA.price,
+        askNo: p.legB.price,
+        sumYES: p.sumYES,
+        status: p.status,
+        countdown: Math.floor((new Date(p.endDate).getTime() - Date.now())/1000)
+    }));
+    res.end(JSON.stringify({ ...state, rounds }));
   } else if (req.url === '/config' && req.method === 'POST') {
-    let b = '';
-    req.on('data', c => b += c);
+    let body = '';
+    req.on('data', chunk => body += chunk);
     req.on('end', () => { 
       try { 
-        state.config = { ...state.config, ...JSON.parse(b) }; 
-        addLog(`系统配置已更新并应用`, 'INFO');
+        state.config = { ...state.config, ...JSON.parse(body) }; 
+        res.writeHead(200);
         res.end('ok'); 
-      } catch(e) { res.writeHead(400); res.end('fail'); }
+      } catch(e) { 
+        res.writeHead(400);
+        res.end('invalid json'); 
+      }
     });
   } else if (req.url === '/toggle' && req.method === 'POST') {
     state.config.engineActive = !state.config.engineActive;
-    if (state.config.engineActive) {
-      addLog(`[SYSTEM] 策略引擎已启动`, 'SUCCESS');
-    } else {
-      addLog(`[SYSTEM] 策略引擎已停止`, 'WARN');
-      state.rounds = []; // 停止时清空，防止旧数据残留
-    }
+    addLog(`引擎状态切换 -> ${state.config.engineActive ? 'RUNNING' : 'STOPPED'}`, 'WARN');
+    res.writeHead(200);
     res.end('ok');
-  } else { res.writeHead(404); res.end(); }
+  } else { 
+    res.writeHead(404);
+    res.end(); 
+  }
 });
 
-server.listen(3001, '0.0.0.0', () => console.log('PolyEdge Alpha Engine Running on Port 3001'));
+server.on('error', (e) => {
+    console.error('Server error:', e);
+});
+
+server.listen(3001, '0.0.0.0', () => {
+    console.log('PolyEdge Alpha Engine Running on Port 3001');
+});
