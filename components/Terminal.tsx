@@ -8,32 +8,35 @@ interface TerminalProps {
 
 const Terminal: React.FC<TerminalProps> = ({ logs }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
-  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
-  const lastLogsLength = useRef(0);
+  const isAutoScrollEnabled = useRef(true); // 使用 Ref 避免状态延迟导致的回弹
+  const [uiAutoScroll, setUiAutoScroll] = useState(true); // 仅用于 UI 显示提示
 
-  // 核心逻辑：监听日志变化
+  // 每次日志更新时尝试滚动
   useEffect(() => {
-    if (!terminalRef.current) return;
-
-    // 如果日志增加了，且用户处于自动滚动模式，强制滚到底部
-    if (logs.length !== lastLogsLength.current) {
-      if (shouldAutoScroll) {
-        terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-      }
-      lastLogsLength.current = logs.length;
+    if (terminalRef.current && isAutoScrollEnabled.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
     }
-  }, [logs, shouldAutoScroll]);
+  }, [logs]);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const target = e.currentTarget;
-    const isAtBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 15;
+    const el = e.currentTarget;
+    // 计算是否处于底部：总高度 - 已滚动高度 - 视窗高度
+    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     
-    // 如果用户滑到了最底部，重新激活自动滚动
-    if (isAtBottom) {
-      if (!shouldAutoScroll) setShouldAutoScroll(true);
-    } else {
-      // 只要离开底部，立刻锁定，不再回弹
-      if (shouldAutoScroll) setShouldAutoScroll(false);
+    // 关键逻辑：更新 Ref 决定下一次日志进来时是否滚动
+    isAutoScrollEnabled.current = isAtBottom;
+    
+    // 同时更新 UI 状态显示气泡
+    if (uiAutoScroll !== isAtBottom) {
+      setUiAutoScroll(isAtBottom);
+    }
+  };
+
+  const forceScrollToBottom = () => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+      isAutoScrollEnabled.current = true;
+      setUiAutoScroll(true);
     }
   };
 
@@ -52,16 +55,16 @@ const Terminal: React.FC<TerminalProps> = ({ logs }) => {
         <div className="flex items-center gap-2">
           <i className="fa-solid fa-terminal text-blue-500"></i>
           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">引擎监控终端</span>
-          {!shouldAutoScroll && (
-             <span className="text-[8px] bg-yellow-500/20 text-yellow-500 border border-yellow-500/20 px-2 py-0.5 rounded animate-pulse">
-               历史查看模式 (自动滚动已锁定)
+          {!uiAutoScroll && (
+             <span className="text-[8px] bg-yellow-500/20 text-yellow-500 border border-yellow-500/20 px-2 py-0.5 rounded-full animate-pulse font-black uppercase">
+               PAUSED: 手动查看模式
              </span>
           )}
         </div>
         <div className="flex gap-4 text-[9px] font-bold text-slate-600">
-           <span>LOGS: {logs.length}</span>
-           <span className={shouldAutoScroll ? "text-green-600" : "text-yellow-600"}>
-             {shouldAutoScroll ? "LIVE_TRACKING" : "PAUSED"}
+           <span>TOTAL: {logs.length}</span>
+           <span className={uiAutoScroll ? "text-green-600" : "text-yellow-600"}>
+             {uiAutoScroll ? "● SYNCING" : "○ MANUAL"}
            </span>
         </div>
       </div>
@@ -73,32 +76,32 @@ const Terminal: React.FC<TerminalProps> = ({ logs }) => {
       >
         {logs.map((log) => (
           <div key={log.id} className="flex gap-3 hover:bg-white/5 p-1 rounded transition-all group">
-            <span className="text-slate-600 shrink-0 font-bold">[{log.timestamp}]</span>
-            <span className={`px-1.5 rounded text-[8px] font-black border self-start ${getLevelStyle(log.level)}`}>
+            <span className="text-slate-600 shrink-0 font-bold w-16">[{log.timestamp}]</span>
+            <span className={`px-1.5 rounded text-[8px] font-black border h-fit ${getLevelStyle(log.level)}`}>
               {log.level}
             </span>
             <span className="text-slate-300 break-all group-hover:text-white transition-colors">{log.message}</span>
           </div>
         ))}
-        {logs.length === 0 && <div className="text-slate-700 italic px-2">等待数据流同步...</div>}
+        {logs.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full text-slate-700 gap-3 opacity-50">
+             <i className="fa-solid fa-circle-notch animate-spin text-2xl"></i>
+             <span className="italic uppercase text-[10px] tracking-widest">正在建立数据流通道...</span>
+          </div>
+        )}
       </div>
 
-      <div className="p-2 bg-[#0d1117] border-t border-slate-800 flex justify-center relative">
-         {!shouldAutoScroll && (
+      <div className="p-3 bg-[#0d1117] border-t border-slate-800 flex justify-center relative">
+         {!uiAutoScroll && (
             <button 
-              onClick={() => {
-                if (terminalRef.current) {
-                  terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-                  setShouldAutoScroll(true);
-                }
-              }}
-              className="absolute -top-12 bg-blue-600 hover:bg-blue-500 text-white text-[10px] px-6 py-2 rounded-full shadow-2xl font-black uppercase tracking-widest border border-blue-400/50 flex items-center gap-2"
+              onClick={forceScrollToBottom}
+              className="absolute -top-12 bg-blue-600 hover:bg-blue-500 text-white text-[10px] px-6 py-2 rounded-full shadow-2xl font-black uppercase tracking-widest border border-blue-400/50 flex items-center gap-2 transition-all active:scale-95"
             >
-              <i className="fa-solid fa-arrow-down"></i> 恢复实时追踪
+              <i className="fa-solid fa-arrow-down-long"></i> 返回最新日志
             </button>
          )}
          <div className="h-1 w-24 bg-slate-800 rounded-full overflow-hidden">
-            <div className={`h-full bg-blue-500 ${shouldAutoScroll ? 'animate-progress' : ''}`}></div>
+            <div className={`h-full bg-blue-500 ${uiAutoScroll ? 'animate-progress' : 'opacity-20'}`}></div>
          </div>
       </div>
     </div>

@@ -1,15 +1,15 @@
 
 /**
- * PolyEdge 24/7 后端套利机器人 (Node.js) - 专研修复版
- * 修复：无法抓取市场、XRP 支持、15M 高频轮次锁定
+ * PolyEdge 24/7 后端套利机器人 (Node.js) - 核心修复版
+ * 重点解决：15M 市场匹配失效问题
  */
 import http from 'http';
 
 let state = {
   config: {
     scanIntervalMs: 2000,
-    dropThreshold: 2.0, // 降低阈值以提高灵敏度
-    sumTarget: 0.988,   // 提高入场机会
+    dropThreshold: 1.8, 
+    sumTarget: 0.988,   
     betAmount: 10,
     autoBet: true
   },
@@ -45,40 +45,25 @@ function addLog(message, level = 'INFO') {
 async function updateMarketData() {
   scanCount++;
   try {
-    // 1. 高频市场发现 (每 10 次扫描全量刷新一次库)
-    if (state.rounds.length === 0 || scanCount % 50 === 0) {
-      // 策略：直接拉取最新的 Price Prediction 相关市场
-      // 增加 query 关键字提升命中率
-      const searchUrls = [
-        `${GAMMA_API}/markets?active=true&closed=false&limit=100&tag=Price%20Prediction`,
-        `${GAMMA_API}/markets?active=true&closed=false&limit=100&query=15-minute`
-      ];
-
-      let allFound = [];
-      for (const url of searchUrls) {
-        try {
-          const res = await fetch(url);
-          if (res.ok) {
-            const data = await res.json();
-            allFound = [...allFound, ...data];
-          }
-        } catch(e) {}
-      }
-
-      // 去重并过滤
-      const uniqueMarkets = Array.from(new Map(allFound.map(m => [m.id, m])).values());
+    // 1. 强力市场搜索逻辑：每 30 秒进行一次深度全量库扫描
+    if (state.rounds.length === 0 || scanCount % 15 === 0) {
+      // 策略：直接拉取前 500 个活跃市场，不再信任搜索 API
+      const res = await fetch(`${GAMMA_API}/markets?active=true&closed=false&limit=500&order=volume24hr&dir=desc`);
+      if (!res.ok) throw new Error(`Gamma API Down`);
+      const allMarkets = await res.json();
       
-      const filtered = uniqueMarkets.filter(m => {
+      const filtered = allMarkets.filter(m => {
         const title = (m.question || "").toLowerCase();
         const slug = (m.slug || "").toLowerCase();
         
-        // 核心资产：BTC, ETH, SOL, XRP
-        const isTargetAsset = /bitcoin|btc|ethereum|eth|solana|sol|ripple|xrp/.test(slug) || 
-                             /bitcoin|ethereum|solana|xrp|ripple/.test(title);
+        // 资产正则：覆盖多种命名变体
+        const isTargetAsset = /\b(bitcoin|btc|ethereum|eth|solana|sol|ripple|xrp)\b/.test(slug) || 
+                             /\b(bitcoin|ethereum|solana|xrp)\b/i.test(title);
         
-        // 核心时间：15分钟
-        const is15Min = /15[ -]?min/.test(slug) || /15[ -]?min/.test(title) || slug.includes('price-prediction');
+        // 时间周期正则：匹配 "15-minute", "15 minute", "15 min", "15m"
+        const is15Min = /15[ -]?(min|minute|m)\b/.test(slug) || /15[ -]?(min|minute|m)\b/.test(title);
         
+        // 必须有盘口 Token
         let tokens = m.clobTokenIds;
         if (typeof tokens === 'string') {
           try { tokens = JSON.parse(tokens); } catch(e) { return false; }
@@ -87,14 +72,14 @@ async function updateMarketData() {
       });
 
       if (filtered.length > 0) {
-        const newRounds = filtered.slice(0, 12).map(m => {
+        const newRounds = filtered.map(m => {
           let tokens = typeof m.clobTokenIds === 'string' ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
           let asset = 'BTC';
-          if (m.slug.includes('eth')) asset = 'ETH';
-          else if (m.slug.includes('sol')) asset = 'SOL';
-          else if (m.slug.includes('xrp') || m.slug.includes('ripple')) asset = 'XRP';
+          const s = m.slug.toLowerCase();
+          if (s.includes('eth')) asset = 'ETH';
+          else if (s.includes('sol')) asset = 'SOL';
+          else if (s.includes('xrp') || s.includes('ripple')) asset = 'XRP';
 
-          // 继承旧状态的价格历史
           const oldRound = state.rounds.find(r => r.id === m.id);
           return {
             id: m.id,
@@ -113,16 +98,18 @@ async function updateMarketData() {
           };
         });
         
-        if (state.rounds.length === 0) {
-          addLog(`引擎初始化成功: 锁定 ${newRounds.length} 个 15M 专用盘口`, 'SUCCESS');
+        // 按资产去重并保持最新轮次（防止 API 返回过期市场）
+        state.rounds = newRounds.sort((a,b) => a.countdown - b.countdown).slice(0, 12);
+        
+        if (scanCount % 30 === 1) {
+           addLog(`[引擎同步] 已刷新 ${state.rounds.length} 个活跃 15M 轮次`, 'SUCCESS');
         }
-        state.rounds = newRounds;
-      } else if (scanCount % 5 === 0) {
-        addLog("正在通过 Tag 和 Query 深度搜索 15M 轮次...", "INFO");
+      } else {
+        if (scanCount % 5 === 0) addLog("正在深度检索全量库以匹配 15M 资产对...", "INFO");
       }
     }
 
-    // 2. 实时价格轮询
+    // 2. 价格高频更新
     await Promise.all(state.rounds.map(async (round) => {
       try {
         const [yesRes, noRes] = await Promise.all([
@@ -136,18 +123,18 @@ async function updateMarketData() {
         const newNo = noData.asks?.[0]?.price ? parseFloat(noData.asks[0].price) : round.askNo;
 
         round.historyYes.push(newYes);
-        if (round.historyYes.length > 15) round.historyYes.shift();
+        if (round.historyYes.length > 20) round.historyYes.shift();
         
-        // 策略触发
+        // 策略执行
         if (round.status === 'SCANNING' && state.config.autoBet) {
-          const prev = round.historyYes[round.historyYes.length - 2] || newYes;
+          const prev = round.historyYes[round.historyYes.length - 3] || newYes;
           const drop = ((prev - newYes) / prev) * 100;
-          if (drop >= state.config.dropThreshold && newYes > 0.1 && newYes < 0.9) {
+          if (drop >= state.config.dropThreshold && newYes > 0.05 && newYes < 0.95) {
             executeOrder(round, 'YES', 1, newYes);
             round.status = 'HEDGING';
             round.leg1Side = 'YES';
             round.leg1Price = newYes;
-            addLog(`[SIGNAL] ${round.asset} 跌幅 ${drop.toFixed(2)}%, 已入场 Leg1`, 'WARN');
+            addLog(`入场信号: ${round.asset} 快速回撤 ${drop.toFixed(2)}%`, 'WARN');
           }
         }
 
@@ -162,8 +149,8 @@ async function updateMarketData() {
             state.stats.balance += profit;
             state.stats.winRate = (state.stats.wonTrades / state.stats.totalTrades) * 100;
             round.status = 'LOCKED';
-            addLog(`[PROFIT] ${round.asset} 套利闭环, 获利: $${profit.toFixed(2)}`, 'SUCCESS');
-            setTimeout(() => { round.status = 'SCANNING'; round.leg1Side = null; }, 45000);
+            addLog(`套利锁定: ${round.asset}, 净利: $${profit.toFixed(2)}`, 'SUCCESS');
+            setTimeout(() => { round.status = 'SCANNING'; round.leg1Side = null; }, 60000);
           }
         }
 
@@ -173,7 +160,7 @@ async function updateMarketData() {
       } catch (e) {}
     }));
   } catch (e) {
-    console.error("Critical Loop Error:", e);
+    console.error("Critical Error:", e);
   }
 }
 
@@ -211,4 +198,4 @@ const server = http.createServer((req, res) => {
   } else { res.writeHead(404); res.end(); }
 });
 
-server.listen(3001, '0.0.0.0', () => console.log('PolyEdge Master API Running on 0.0.0.0:3001'));
+server.listen(3001, '0.0.0.0', () => console.log('PolyEdge Master API Online: 0.0.0.0:3001'));
