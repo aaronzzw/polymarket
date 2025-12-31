@@ -8,35 +8,39 @@ interface TerminalProps {
 
 const Terminal: React.FC<TerminalProps> = ({ logs }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
-  const isAutoScrollEnabled = useRef(true); // 使用 Ref 避免状态延迟导致的回弹
-  const [uiAutoScroll, setUiAutoScroll] = useState(true); // 仅用于 UI 显示提示
+  const userIsScrolling = useRef(false);
+  const [isLocked, setIsLocked] = useState(false);
 
-  // 每次日志更新时尝试滚动
+  // 核心逻辑：精准控制滚动，不依赖 React 的 state 驱动 scrollTop
   useEffect(() => {
-    if (terminalRef.current && isAutoScrollEnabled.current) {
-      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    const el = terminalRef.current;
+    if (!el) return;
+
+    // 只有当用户没有滑上去（在底部 50px 范围内）时，才允许自动滚动
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    
+    if (isNearBottom && !isLocked) {
+      el.scrollTop = el.scrollHeight;
     }
-  }, [logs]);
+  }, [logs, isLocked]);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
-    // 计算是否处于底部：总高度 - 已滚动高度 - 视窗高度
-    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    // 检测是否偏离底部
+    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
     
-    // 关键逻辑：更新 Ref 决定下一次日志进来时是否滚动
-    isAutoScrollEnabled.current = isAtBottom;
-    
-    // 同时更新 UI 状态显示气泡
-    if (uiAutoScroll !== isAtBottom) {
-      setUiAutoScroll(isAtBottom);
+    // 如果不在底部，标记为“已锁定”，禁止自动回滚
+    if (!isAtBottom) {
+      if (!isLocked) setIsLocked(true);
+    } else {
+      if (isLocked) setIsLocked(false);
     }
   };
 
-  const forceScrollToBottom = () => {
+  const resetScroll = () => {
     if (terminalRef.current) {
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-      isAutoScrollEnabled.current = true;
-      setUiAutoScroll(true);
+      setIsLocked(false);
     }
   };
 
@@ -50,29 +54,32 @@ const Terminal: React.FC<TerminalProps> = ({ logs }) => {
   };
 
   return (
-    <div className="bg-[#151921] rounded-2xl border border-slate-800 h-full flex flex-col font-mono text-[11px] overflow-hidden shadow-xl">
+    <div className="bg-[#151921] rounded-2xl border border-slate-800 h-full flex flex-col font-mono text-[11px] overflow-hidden shadow-2xl relative">
+      {/* 状态顶栏 */}
       <div className="px-5 py-3 border-b border-slate-800 flex justify-between items-center bg-[#0d1117]">
         <div className="flex items-center gap-2">
-          <i className="fa-solid fa-terminal text-blue-500"></i>
-          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">引擎监控终端</span>
-          {!uiAutoScroll && (
-             <span className="text-[8px] bg-yellow-500/20 text-yellow-500 border border-yellow-500/20 px-2 py-0.5 rounded-full animate-pulse font-black uppercase">
-               PAUSED: 手动查看模式
+          <i className="fa-solid fa-terminal text-blue-500 text-xs"></i>
+          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">终端实时监控</span>
+          {isLocked && (
+             <span className="bg-orange-500/20 text-orange-400 text-[8px] px-2 py-0.5 rounded-full border border-orange-500/20 animate-pulse font-black uppercase">
+               滚动已锁定
              </span>
           )}
         </div>
         <div className="flex gap-4 text-[9px] font-bold text-slate-600">
-           <span>TOTAL: {logs.length}</span>
-           <span className={uiAutoScroll ? "text-green-600" : "text-yellow-600"}>
-             {uiAutoScroll ? "● SYNCING" : "○ MANUAL"}
+           <span>LOGS: {logs.length}</span>
+           <span className={isLocked ? "text-orange-500" : "text-green-600"}>
+             {isLocked ? "MANUAL_PAUSE" : "LIVE_STREAM"}
            </span>
         </div>
       </div>
       
+      {/* 日志内容容器 - 彻底禁用 scroll-smooth 防止抖动回弹 */}
       <div 
         ref={terminalRef}
         onScroll={handleScroll}
-        className="p-4 flex-grow overflow-y-auto space-y-1.5 scroll-smooth relative"
+        className="p-4 flex-grow overflow-y-auto space-y-1.5 relative selection:bg-blue-500/40"
+        style={{ scrollBehavior: 'auto' }} 
       >
         {logs.map((log) => (
           <div key={log.id} className="flex gap-3 hover:bg-white/5 p-1 rounded transition-all group">
@@ -80,28 +87,34 @@ const Terminal: React.FC<TerminalProps> = ({ logs }) => {
             <span className={`px-1.5 rounded text-[8px] font-black border h-fit ${getLevelStyle(log.level)}`}>
               {log.level}
             </span>
-            <span className="text-slate-300 break-all group-hover:text-white transition-colors">{log.message}</span>
+            <span className="text-slate-300 break-all group-hover:text-white transition-colors leading-relaxed tracking-tight">{log.message}</span>
           </div>
         ))}
         {logs.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-slate-700 gap-3 opacity-50">
-             <i className="fa-solid fa-circle-notch animate-spin text-2xl"></i>
-             <span className="italic uppercase text-[10px] tracking-widest">正在建立数据流通道...</span>
+          <div className="flex flex-col items-center justify-center h-full text-slate-700 gap-4 opacity-40">
+             <i className="fa-solid fa-satellite animate-pulse text-3xl"></i>
+             <span className="italic uppercase text-[9px] tracking-[0.3em] font-black">Syncing Market Stream...</span>
           </div>
         )}
       </div>
 
-      <div className="p-3 bg-[#0d1117] border-t border-slate-800 flex justify-center relative">
-         {!uiAutoScroll && (
+      {/* 底部功能条 */}
+      <div className="p-3 bg-[#0d1117] border-t border-slate-800 flex justify-center items-center gap-4">
+         {isLocked && (
             <button 
-              onClick={forceScrollToBottom}
-              className="absolute -top-12 bg-blue-600 hover:bg-blue-500 text-white text-[10px] px-6 py-2 rounded-full shadow-2xl font-black uppercase tracking-widest border border-blue-400/50 flex items-center gap-2 transition-all active:scale-95"
+              onClick={resetScroll}
+              className="absolute -top-14 bg-blue-600 hover:bg-blue-500 text-white text-[10px] px-8 py-2.5 rounded-full shadow-[0_0_25px_rgba(37,99,235,0.4)] font-black uppercase tracking-widest border border-blue-400/50 flex items-center gap-3 transition-all active:scale-90 z-20"
             >
-              <i className="fa-solid fa-arrow-down-long"></i> 返回最新日志
+              <i className="fa-solid fa-arrow-down-long animate-bounce"></i> 恢复实时追踪
             </button>
          )}
-         <div className="h-1 w-24 bg-slate-800 rounded-full overflow-hidden">
-            <div className={`h-full bg-blue-500 ${uiAutoScroll ? 'animate-progress' : 'opacity-20'}`}></div>
+         <div className="flex items-center gap-4 w-full justify-between px-4">
+            <div className="text-[9px] text-slate-600 font-bold uppercase tracking-widest">
+               PolyEdge V5.2 <span className="mx-2">|</span> 策略状态: {isLocked ? '锁定' : '活跃'}
+            </div>
+            <div className="h-1.5 w-32 bg-slate-800 rounded-full overflow-hidden">
+               <div className={`h-full bg-blue-500 ${!isLocked ? 'animate-progress' : 'opacity-20 transition-opacity duration-500'}`}></div>
+            </div>
          </div>
       </div>
     </div>

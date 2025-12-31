@@ -75,16 +75,16 @@ const App: React.FC = () => {
            </div>
            <div className="hidden lg:flex gap-6 text-[10px] font-black uppercase tracking-widest text-slate-500">
              <span className="hover:text-white cursor-pointer transition-colors">Trending</span>
-             <span className="text-white border-b-2 border-blue-500 pb-4 mt-4 cursor-default">Crypto</span>
-             <span className="hover:text-white cursor-pointer transition-colors">Finance</span>
-             <span className="hover:text-white cursor-pointer transition-colors">Politics</span>
+             <span className="text-white border-b-2 border-blue-500 pb-4 mt-4 cursor-default">Markets</span>
+             <span className="hover:text-white cursor-pointer transition-colors">History</span>
+             <span className="hover:text-white cursor-pointer transition-colors">Alpha</span>
            </div>
         </div>
         <div className="flex items-center gap-4">
            <div className={`flex items-center gap-2 px-3 py-1 rounded-full border transition-all ${isServerActive ? 'border-green-500/30 bg-green-500/10' : 'border-red-500/30 bg-red-500/10'}`}>
               <div className={`w-1.5 h-1.5 rounded-full ${isServerActive ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
               <span className={`text-[9px] font-black uppercase ${isServerActive ? 'text-green-400' : 'text-red-400'}`}>
-                {isServerActive ? 'Market Stream Live' : 'Engine Disconnected'}
+                {isServerActive ? 'Engine Active' : 'Offline'}
               </span>
            </div>
         </div>
@@ -93,15 +93,12 @@ const App: React.FC = () => {
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
         <aside className="w-64 border-r border-slate-800 p-4 hidden md:flex flex-col gap-1 bg-[#0d1117]/50">
-           <SidebarItem icon="fa-table-cells-large" label="All" count="211" />
-           <SidebarItem icon="fa-clock" label="15 Min" count={rounds.length} />
+           <SidebarItem icon="fa-table-cells-large" label="All" count={rounds.length} />
+           <SidebarItem icon="fa-clock" label="Active" count={rounds.length} />
            <SidebarItem icon="fa-rotate" label="Hourly" count="4" />
-           <SidebarItem icon="fa-hourglass-half" label="4 Hour" count="4" />
+           <SidebarItem icon="fa-hourglass-half" label="Settling" count={rounds.filter(r => r.countdown < 3600).length} />
            <SidebarItem icon="fa-calendar" label="Daily" count="4" />
-           <SidebarItem icon="fa-calendar-week" label="Weekly" count="20" />
-           <SidebarItem icon="fa-chart-line" label="Monthly" count="20" />
-           <SidebarItem icon="fa-rocket" label="Pre-Market" count="94" />
-           <SidebarItem icon="fa-coins" label="ETF" count="3" />
+           <SidebarItem icon="fa-chart-line" label="Profits" />
            <div className="flex-grow"></div>
            <div className="my-4 border-t border-slate-800 opacity-30"></div>
            <SidebarItem icon="fa-gears" label="Settings" />
@@ -119,10 +116,10 @@ const App: React.FC = () => {
                     <i className="fa-solid fa-satellite-dish text-5xl relative"></i>
                   </div>
                   <div className="text-center">
-                    <p className="text-sm font-black uppercase tracking-[0.2em] text-slate-400">正在匹配 Polymarket 15M 高频盘口...</p>
+                    <p className="text-sm font-black uppercase tracking-[0.2em] text-slate-400">正在追踪 Smart Ape 临近结算策略盘口...</p>
                     <p className="text-[10px] opacity-60 mt-2 uppercase italic font-mono max-w-xs mx-auto leading-relaxed">
-                      扫描范围: BTC, ETH, SOL, XRP<br/>
-                      模式: Price Prediction (15 Minute Intervals)
+                      扫描范围: BTC, ETH, SOL, XRP, DOGE<br/>
+                      高频匹配: 15M / 30M / Hourly / Daily Prediction
                     </p>
                   </div>
                </div>
@@ -144,12 +141,15 @@ const App: React.FC = () => {
                         {r.asset === 'ETH' && <i className="fa-brands fa-ethereum text-indigo-400 text-2xl"></i>}
                         {r.asset === 'SOL' && <img src="https://cryptologos.cc/logos/solana-sol-logo.png" className="w-6 h-6 grayscale brightness-200" />}
                         {r.asset === 'XRP' && <img src="https://cryptologos.cc/logos/xrp-xrp-logo.png" className="w-7 h-7" />}
+                        {r.asset === 'CRYPTO' && <i className="fa-solid fa-coins text-yellow-500 text-2xl"></i>}
                       </div>
                       <div>
-                        <h3 className="text-[13px] font-black text-white tracking-tight">{r.asset} Up or Down - 15 minute</h3>
+                        <h3 className="text-[12px] font-black text-white tracking-tight leading-tight">{r.symbol}</h3>
                         <div className="flex items-center gap-2 mt-1.5">
-                          <span className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)] animate-pulse"></span>
-                          <span className="text-[10px] font-black uppercase text-slate-500 tracking-tighter">Live • {Math.floor(r.countdown / 60)}m {r.countdown % 60}s Remaining</span>
+                          <span className={`w-2 h-2 rounded-full shadow-lg animate-pulse ${r.countdown < 1800 ? 'bg-red-500' : 'bg-green-500'}`}></span>
+                          <span className="text-[10px] font-black uppercase text-slate-500 tracking-tighter">
+                            {r.countdown > 3600 ? `${Math.floor(r.countdown/3600)}h ${Math.floor((r.countdown%3600)/60)}m` : `${Math.floor(r.countdown/60)}m ${r.countdown%60}s`} 剩余
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -160,7 +160,7 @@ const App: React.FC = () => {
                        </svg>
                        <div className="absolute inset-0 flex flex-col items-center justify-center">
                           <span className="text-[11px] font-black text-white">{(r.askYes * 100).toFixed(0)}%</span>
-                          <span className="text-[7px] font-bold text-slate-500 uppercase">Up</span>
+                          <span className="text-[7px] font-bold text-slate-500 uppercase">Yes</span>
                        </div>
                     </div>
                   </div>
@@ -169,23 +169,21 @@ const App: React.FC = () => {
                     <div className={`p-4 rounded-xl border transition-all flex flex-col items-center justify-center gap-1 cursor-default ${
                        r.leg1Side === 'YES' ? 'bg-green-500/20 border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]' : 'bg-[#222a35] border-transparent hover:border-slate-600'
                     }`}>
-                       <span className={`text-[11px] font-black uppercase ${r.leg1Side === 'YES' ? 'text-green-400' : 'text-slate-300'}`}>Up</span>
+                       <span className={`text-[11px] font-black uppercase ${r.leg1Side === 'YES' ? 'text-green-400' : 'text-slate-300'}`}>Yes</span>
                        <span className="text-[10px] font-mono font-bold opacity-60">${r.askYes.toFixed(3)}</span>
                     </div>
                     <div className={`p-4 rounded-xl border transition-all flex flex-col items-center justify-center gap-1 cursor-default ${
                        r.leg1Side === 'NO' ? 'bg-red-500/20 border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.1)]' : 'bg-[#222a35] border-transparent hover:border-slate-600'
                     }`}>
-                       <span className={`text-[11px] font-black uppercase ${r.leg1Side === 'NO' ? 'text-red-400' : 'text-slate-300'}`}>Down</span>
+                       <span className={`text-[11px] font-black uppercase ${r.leg1Side === 'NO' ? 'text-red-400' : 'text-slate-300'}`}>No</span>
                        <span className="text-[10px] font-mono font-bold opacity-60">${r.askNo.toFixed(3)}</span>
                     </div>
                   </div>
 
-                  <div className="pt-4 border-t border-slate-800/50 flex justify-between items-center group/card-footer">
+                  <div className="pt-4 border-t border-slate-800/50 flex justify-between items-center">
                     <div className="flex items-center gap-2">
-                       <div className="w-5 h-5 bg-blue-500/10 rounded flex items-center justify-center">
-                          <i className="fa-solid fa-microchip text-[9px] text-blue-500"></i>
-                       </div>
-                       <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest group-hover/card-footer:text-blue-500/70 transition-colors">Edge Ratio: {(r.askYes + r.askNo).toFixed(3)}</span>
+                       <i className="fa-solid fa-microchip text-[9px] text-blue-500"></i>
+                       <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Edge: {(r.askYes + r.askNo).toFixed(3)}</span>
                     </div>
                     <div className="flex items-center gap-3">
                        <i className="fa-regular fa-bookmark text-slate-600 cursor-pointer hover:text-white transition-colors"></i>
@@ -201,7 +199,7 @@ const App: React.FC = () => {
              <div className="lg:col-span-4">
                 <ScannerConfig config={config} setConfig={setConfig as any} isScanning={isServerActive} onToggleScan={() => {}} />
              </div>
-             <div className="lg:col-span-8 flex flex-col gap-6 h-[600px]">
+             <div className="lg:col-span-8 flex flex-col gap-6 h-[650px]">
                 <Terminal logs={logs} />
                 <OrderHistory orders={orders} />
              </div>
