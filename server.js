@@ -1,18 +1,19 @@
 
 /**
- * PolyEdge 核心引擎 - Smart Ape 策略版
- * 策略：全频段监控即刻结算的 Crypto 市场 (无视 15m/1h 标签)
+ * PolyEdge 核心引擎 - Smart Ape 真实策略版
+ * 核心逻辑：高流动性 + 临近结算 + 无视 timeframe + 捕获定价偏离
  */
 import http from 'http';
 
 let state = {
   config: {
     scanIntervalMs: 2000,
-    dropThreshold: 1.2,   // 捕捉更细微的波动
-    sumTarget: 0.994,     // 提高容错率
+    dropThreshold: 1.2,   
+    sumTarget: 0.992,     
     betAmount: 10,
     autoBet: true,
-    maxSettleHours: 24    // 监控未来 24 小时内结算的所有市场
+    maxSettleHours: 12,    // 默认关注 12 小时内结算的市场
+    minVolume: 1000        // 过滤掉无流动性的僵尸盘
   },
   stats: {
     totalTrades: 0,
@@ -40,38 +41,44 @@ function addLog(message, level = 'INFO') {
   };
   state.logs.push(log);
   if (state.logs.length > 50) state.logs.shift();
-  // 仅在关键时刻打印到后台控制台，不再打印扫描心跳
+  // 生产环境只打印非 INFO 日志，彻底解决控制台刷屏
   if (level !== 'INFO') console.log(`[${log.timestamp}] [${level}] ${message}`);
 }
 
 async function updateMarketData() {
   scanCount++;
   try {
-    // 1. 深度扫描：拉取 500 个市场，寻找“即将结算”的 Crypto 盘口
+    // 1. 策略驱动的市场发现：只看“流动性”和“结算时间”
     if (state.rounds.length === 0 || scanCount % 15 === 0) {
-      const res = await fetch(`${GAMMA_API}/markets?active=true&closed=false&limit=500&order=endDate&dir=asc`);
+      // 优先抓取成交量前 200 的活跃市场
+      const res = await fetch(`${GAMMA_API}/markets?active=true&closed=false&limit=200&order=volume24hr&dir=desc`);
       if (!res.ok) throw new Error(`Gamma API Down`);
       const allMarkets = await res.json();
       
       const filtered = allMarkets.filter(m => {
         const slug = (m.slug || "").toLowerCase();
         const title = (m.question || "").toLowerCase();
+        const volume = parseFloat(m.volume24hr || 0);
         
-        // 条件 A: 是加密货币资产
-        const isAsset = /btc|eth|sol|xrp|doge|bitcoin|ethereum|solana|ripple/.test(slug) || 
-                        /bitcoin|ethereum|solana|xrp/.test(title);
+        // 资产：BTC, ETH, SOL, XRP, DOGE, PEPE 等主流加密资产
+        const isCrypto = /btc|eth|sol|xrp|doge|pepe|bitcoin|ethereum|solana|ripple/.test(slug) || 
+                         /bitcoin|ethereum|solana|xrp/.test(title);
         
-        // 条件 B: 临近结算 (24小时内)
-        const timeToSettlement = (new Date(m.endDate).getTime() - Date.now());
-        const hoursLeft = timeToSettlement / (1000 * 60 * 60);
-        const isShortTerm = hoursLeft > 0 && hoursLeft <= state.config.maxSettleHours;
+        // 结算时间：临近结算 (24h内)
+        const msLeft = new Date(m.endDate).getTime() - Date.now();
+        const hoursLeft = msLeft / (1000 * 60 * 60);
+        const isSoon = hoursLeft > 0 && hoursLeft <= state.config.maxSettleHours;
 
-        // 条件 C: 必须是二元期权 (Yes/No)
+        // 流动性：必须有真实成交
+        const hasLiquidity = volume >= state.config.minVolume;
+
+        // 结构：必须是二元期权
         let tokens = m.clobTokenIds;
         if (typeof tokens === 'string') {
           try { tokens = JSON.parse(tokens); } catch(e) { return false; }
         }
-        return isAsset && isShortTerm && Array.isArray(tokens) && tokens.length === 2;
+        
+        return isCrypto && isSoon && hasLiquidity && Array.isArray(tokens) && tokens.length === 2;
       });
 
       if (filtered.length > 0) {
@@ -97,18 +104,18 @@ async function updateMarketData() {
             status: oldRound?.status || 'SCANNING',
             leg1Side: oldRound?.leg1Side || null,
             leg1Price: oldRound?.leg1Price || null,
-            countdown: Math.floor((new Date(m.endDate).getTime() - Date.now()) / 1000)
+            countdown: Math.floor(msLeft / 1000)
           };
         });
         
-        // 保持前 12 个最迫切需要结算的市场
+        // 按结算迫切程度排序
         state.rounds = newRounds.sort((a,b) => a.countdown - b.countdown).slice(0, 12);
         
-        if (scanCount === 1) addLog(`初始化成功: 锁定 ${state.rounds.length} 个临近结算市场`, 'SUCCESS');
+        if (scanCount === 1) addLog(`Alpha 引擎就绪: 锁定 ${state.rounds.length} 个高频套利目标`, 'SUCCESS');
       }
     }
 
-    // 2. 实时价格获取与对冲触发
+    // 2. 毫秒级差价监控
     await Promise.all(state.rounds.map(async (round) => {
       try {
         const [yesRes, noRes] = await Promise.all([
@@ -122,20 +129,22 @@ async function updateMarketData() {
         const newNo = noData.asks?.[0]?.price ? parseFloat(noData.asks[0].price) : round.askNo;
 
         round.historyYes.push(newYes);
-        if (round.historyYes.length > 30) round.historyYes.shift();
+        if (round.historyYes.length > 20) round.historyYes.shift();
         
+        // 发现错价
         if (round.status === 'SCANNING' && state.config.autoBet) {
           const prev = round.historyYes[round.historyYes.length - 2] || newYes;
           const drop = ((prev - newYes) / prev) * 100;
-          if (drop >= state.config.dropThreshold && newYes > 0.1 && newYes < 0.9) {
+          if (drop >= state.config.dropThreshold && newYes > 0.05 && newYes < 0.95) {
             executeOrder(round, 'YES', 1, newYes);
             round.status = 'HEDGING';
             round.leg1Side = 'YES';
             round.leg1Price = newYes;
-            addLog(`触发信号: ${round.symbol} 异动 ${drop.toFixed(2)}% | 价格: ${newYes}`, 'WARN');
+            addLog(`捕捉异动: ${round.symbol} 偏离 ${drop.toFixed(2)}%`, 'WARN');
           }
         }
 
+        // 完成对冲
         if (round.status === 'HEDGING' && state.config.autoBet) {
           const totalCost = round.leg1Price + newNo;
           if (totalCost <= state.config.sumTarget) {
@@ -147,18 +156,18 @@ async function updateMarketData() {
             state.stats.balance += profit;
             state.stats.winRate = (state.stats.wonTrades / state.stats.totalTrades) * 100;
             round.status = 'LOCKED';
-            addLog(`套利成功: ${round.symbol} 已锁定盈余 $${profit.toFixed(2)}`, 'SUCCESS');
-            setTimeout(() => { round.status = 'SCANNING'; round.leg1Side = null; }, 45000);
+            addLog(`策略闭环: ${round.symbol} | 利润: $${profit.toFixed(2)}`, 'SUCCESS');
+            setTimeout(() => { round.status = 'SCANNING'; round.leg1Side = null; }, 30000);
           }
         }
 
         round.askYes = newYes;
         round.askNo = newNo;
-        round.countdown = Math.max(0, round.countdown - 1.5);
+        round.countdown = Math.max(0, round.countdown - 2);
       } catch (e) {}
     }));
   } catch (e) {
-    console.error("Critical Engine Error:", e);
+    // 错误处理
   }
 }
 
@@ -196,4 +205,4 @@ const server = http.createServer((req, res) => {
   } else { res.writeHead(404); res.end(); }
 });
 
-server.listen(3001, '0.0.0.0', () => console.log('PolyEdge API Terminal Ready on 0.0.0.0:3001'));
+server.listen(3001, '0.0.0.0', () => console.log('PolyEdge Alpha Engine Running...'));
