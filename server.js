@@ -4,7 +4,7 @@
  * 功能：独立运行，抓取真实数据，维护交易状态
  * 运行：node server.js
  */
-const http = require('http');
+import http from 'http';
 
 // --- 全局持久化状态 (即使前端关闭，这里依然运行) ---
 let state = {
@@ -204,7 +204,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(3001, '0.0.0.0', () => {
   console.log('\n==========================================');
-  console.log('   PolyEdge 24/7 策略后端已启动');
+  console.log('   PolyEdge 24/7 策略后端已启动 (ES Module)');
   console.log('   端口: 3001');
   console.log('   状态: 正在后台监控 Polymarket 实时深度...');
   console.log('==========================================\n');
