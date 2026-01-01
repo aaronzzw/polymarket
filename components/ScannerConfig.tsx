@@ -1,124 +1,87 @@
 
-import React, { useState } from 'react';
-import { TradeConfig } from '../types';
+import React from 'react';
 
-interface ScannerConfigProps {
-  config: TradeConfig & { engineActive?: boolean, maxSettleMinutes?: number };
-  setConfig: React.Dispatch<React.SetStateAction<any>>;
-  onSave: () => void;
-  onToggle: () => void;
-}
-
-const ScannerConfig: React.FC<ScannerConfigProps> = ({ config, setConfig, onSave, onToggle }) => {
-  const [showKey, setShowKey] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+const ScannerConfig: React.FC<any> = ({ config, setConfig, onSave, onToggle }) => {
+  const handleChange = (e: any) => {
     const { name, value, type, checked } = e.target;
     setConfig((prev: any) => ({
       ...prev,
-      [name]: type === 'checkbox' ? checked : (type === 'number' ? parseFloat(value) || 0 : value)
+      [name]: type === 'checkbox' ? checked : parseFloat(value) || 0
     }));
   };
 
-  const handleSaveClick = async () => {
-    setIsSaving(true);
-    await onSave();
-    setTimeout(() => setIsSaving(false), 800);
-  };
-
-  const InputField = ({ label, name, value, suffix, icon, type = "number" }: { label: string, name: string, value: any, suffix?: string, icon?: string, type?: string }) => (
-    <div className="flex flex-col gap-1 mb-3">
-      <label className="text-[10px] text-slate-500 uppercase font-black tracking-widest flex items-center gap-2">
-        {icon && <i className={`${icon} text-blue-500/50`}></i>}
-        {label}
-      </label>
-      <div className="relative">
-        <input 
-          type={type} 
-          name={name}
-          value={value}
-          onChange={handleChange}
-          className="w-full bg-[#0d1117] border border-slate-800 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-blue-500 transition-all font-mono text-blue-100"
-        />
-        {suffix && <span className="absolute right-4 top-2.5 text-[10px] text-slate-600 font-black italic">{suffix}</span>}
-      </div>
+  const Input = ({ label, name, value, suffix }: any) => (
+    <div className="mb-4">
+       <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest block mb-1.5">{label}</label>
+       <div className="relative group">
+          <input 
+            type="number" 
+            name={name} 
+            value={value} 
+            onChange={handleChange}
+            className="w-full bg-[#050608] border border-white/10 rounded-md p-2.5 text-xs font-black text-red-500 focus:outline-none focus:border-red-500/50 transition-all group-hover:border-white/20"
+          />
+          <span className="absolute right-3 top-2.5 text-[8px] font-black text-slate-700 uppercase italic">{suffix}</span>
+       </div>
     </div>
   );
 
   return (
-    <div className="bg-[#151921] rounded-2xl border border-slate-800 h-full flex flex-col shadow-xl overflow-hidden">
-      <div className="p-5 border-b border-slate-800 bg-[#0d1117]/50 flex justify-between items-center">
-        <span className="text-[10px] font-black tracking-widest text-white uppercase italic">引擎核心控制台</span>
-        <div className="flex items-center gap-3">
-          <div className={`w-2 h-2 rounded-full ${config.engineActive ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-          <span className="text-[9px] font-black text-slate-500 uppercase">{config.engineActive ? 'Active' : 'Standby'}</span>
-        </div>
+    <div className="bg-[#0a0c10] border border-white/5 rounded-xl flex flex-col h-full overflow-hidden shadow-2xl border-t-2 border-t-red-600">
+      <div className="p-4 border-b border-white/5 bg-white/2 flex justify-between items-center">
+         <div className="flex flex-col">
+            <span className="text-[10px] font-black uppercase tracking-widest text-white italic">Rust Engine Control</span>
+            <span className="text-[7px] text-red-500 font-bold uppercase tracking-tighter">Low Latency Mode v7.0</span>
+         </div>
+         <div className={`w-2 h-2 rounded-full ${config.engineActive ? 'bg-red-500 animate-ping' : 'bg-slate-800'}`}></div>
       </div>
-      
-      <div className="p-6 flex-grow space-y-2 overflow-y-auto">
-        <button 
-          onClick={onToggle}
-          className={`w-full py-4 rounded-xl font-black uppercase tracking-[0.2em] text-xs mb-6 transition-all shadow-lg flex items-center justify-center gap-3 ${
-            config.engineActive 
-            ? 'bg-red-600/20 border border-red-600/50 text-red-500 hover:bg-red-600/30' 
-            : 'bg-blue-600 border border-blue-400 text-white hover:bg-blue-500 shadow-blue-500/20'
-          }`}
-        >
-          <i className={`fa-solid ${config.engineActive ? 'fa-stop' : 'fa-play'}`}></i>
-          {config.engineActive ? '停止扫描引擎' : '启动扫描引擎'}
-        </button>
 
-        <InputField label="扫描频率" name="scanIntervalMs" value={config.scanIntervalMs} suffix="MS" icon="fa-solid fa-microchip" />
-        <InputField label="最大结算周期" name="maxSettleMinutes" value={config.maxSettleMinutes || 1440} suffix="MINS" icon="fa-solid fa-hourglass-half" />
-        <InputField label="获利触发阈值" name="profitThreshold" value={(config as any).profitThreshold || 0.008} suffix="%" icon="fa-solid fa-bolt" />
-        <InputField label="单笔下注" name="betAmount" value={config.betAmount} suffix="SHARES" icon="fa-solid fa-coins" />
-        
-        <div className="pt-4 border-t border-slate-800/50 mt-4">
-          <InputField label="RPC 节点 (Polygon)" name="rpcUrl" value={(config as any).rpcUrl || ''} suffix="NODE" icon="fa-solid fa-network-wired" type="text" />
-          <div className="flex flex-col gap-1 mb-4">
-            <label className="text-[10px] text-slate-600 uppercase font-black tracking-widest flex justify-between">
-              <span>账户私钥</span>
-              <button onClick={() => setShowKey(!showKey)} className="text-blue-500 hover:underline">{showKey ? '隐藏' : '显示'}</button>
-            </label>
-            <input 
-              type={showKey ? 'text' : 'password'}
-              name="privateKey"
-              value={(config as any).privateKey || ''}
-              onChange={handleChange}
-              placeholder="0x..."
-              className="w-full bg-[#0d1117] border border-slate-800 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-red-500/50 transition-all font-mono text-red-200"
-            />
-          </div>
-        </div>
+      <div className="p-5 flex-grow overflow-y-auto bg-[#0a0c10]">
+         <button 
+           onClick={onToggle}
+           className={`w-full py-4 rounded-md text-[10px] font-black uppercase tracking-[0.2em] mb-8 transition-all border-2 ${
+             config.engineActive ? 'bg-red-600/10 border-red-600/50 text-red-600 shadow-inner' : 'bg-red-600 border-red-400 text-white shadow-[0_10px_30px_rgba(220,38,38,0.3)] hover:scale-[1.02]'
+           }`}
+         >
+           {config.engineActive ? 'Stop Rust Engine' : 'Ignite Rust Engine'}
+         </button>
 
-        <div className="pt-2">
-          <div className="flex items-center justify-between p-4 bg-[#0d1117] rounded-xl border border-slate-800/50">
-            <div className="flex flex-col">
-              <span className="text-[10px] font-black text-slate-300 uppercase">自动交易</span>
-              <span className="text-[8px] text-slate-600 font-bold uppercase tracking-tighter">BOT EXECUTION</span>
+         <div className="space-y-2">
+            <Input label="Snipe Window (15m start)" name="windowMin" value={config.windowMin} suffix="MINS" />
+            <Input label="3S Crash Delta Threshold" name="movePct" value={config.movePct} suffix="PCT" />
+            <Input label="Hedge Profit Target" name="sumTarget" value={config.sumTarget} suffix="COST" />
+            <Input label="FOK Order Quantity" name="betAmount" value={config.betAmount} suffix="SHARES" />
+         </div>
+
+         <div className="mt-8 pt-8 border-t border-white/5">
+            <div className="flex justify-between items-center mb-6">
+               <div>
+                  <div className="text-[10px] font-black text-white uppercase italic tracking-wider">Fast-Or-Kill (FOK)</div>
+                  <div className="text-[7px] text-slate-600 uppercase font-bold">Strict execution only</div>
+               </div>
+               <div className="text-red-500 text-xs font-black italic">ACTIVE</div>
             </div>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input type="checkbox" name="autoBet" checked={config.autoBet} onChange={handleChange} className="sr-only peer" />
-              <div className="w-10 h-5 bg-slate-800 rounded-full peer peer-checked:bg-blue-600 transition-all after:content-[''] after:absolute after:top-1 after:left-1 after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-5 shadow-inner"></div>
-            </label>
-          </div>
-        </div>
+            
+            <div className="flex justify-between items-center">
+               <div>
+                  <div className="text-[10px] font-black text-white uppercase italic tracking-wider">Auto-Hedge Core</div>
+                  <div className="text-[7px] text-slate-600 uppercase font-bold">Leg 2 Parallel Scanning</div>
+               </div>
+               <label className="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="autoBet" checked={config.autoBet} onChange={handleChange} className="sr-only peer" />
+                  <div className="w-10 h-5 bg-slate-800 rounded-full peer peer-checked:bg-red-600 transition-all after:content-[''] after:absolute after:top-1 after:left-1 after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-5 shadow-inner"></div>
+               </label>
+            </div>
+         </div>
       </div>
 
-      <div className="p-4 bg-[#0d1117] border-t border-slate-800">
-        <button 
-          onClick={handleSaveClick}
-          disabled={isSaving}
-          className="w-full bg-slate-800 hover:bg-slate-700 text-white py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border border-slate-700 flex items-center justify-center gap-2"
-        >
-          {isSaving ? (
-            <i className="fa-solid fa-circle-notch animate-spin"></i>
-          ) : (
-            <i className="fa-solid fa-floppy-disk text-blue-400"></i>
-          )}
-          {isSaving ? '正在保存...' : '保存并应用配置'}
-        </button>
+      <div className="p-4 bg-white/2 border-t border-white/5">
+         <div className="text-[7px] text-slate-700 font-black uppercase text-center mb-3 tracking-widest">
+            Security Hash: 0X8F2...4E9A
+         </div>
+         <button onClick={onSave} className="w-full bg-slate-900 border border-white/10 hover:border-red-500/50 text-white text-[9px] py-3 rounded font-black uppercase tracking-widest transition-all">
+           Synchronize Memory Buffer
+         </button>
       </div>
     </div>
   );

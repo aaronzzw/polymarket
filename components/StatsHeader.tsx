@@ -16,8 +16,8 @@ const StatsHeader: React.FC<StatsHeaderProps> = ({ stats }) => {
             <i className="fa-solid fa-layer-group text-cyan-400"></i>
           </div>
         </div>
-        <div className="text-3xl font-bold mb-1">{stats.totalTrades}</div>
-        <div className="text-[10px] text-cyan-500 font-medium">总胜场: {stats.wonTrades}</div>
+        <div className="text-3xl font-bold mb-1">{stats.totalTrades ?? 0}</div>
+        <div className="text-[10px] text-cyan-500 font-medium">总胜场: {stats.wonTrades ?? 0}</div>
       </div>
 
       <div className="bg-[#151921] p-5 rounded-lg border border-slate-800 glow-purple">
@@ -27,7 +27,7 @@ const StatsHeader: React.FC<StatsHeaderProps> = ({ stats }) => {
             <i className="fa-solid fa-bullseye text-purple-400"></i>
           </div>
         </div>
-        <div className="text-3xl font-bold mb-1">{stats.winRate.toFixed(1)}%</div>
+        <div className="text-3xl font-bold mb-1">{(stats.winRate ?? 0).toFixed(1)}%</div>
         <div className="text-[10px] text-purple-500 font-medium uppercase">历史表现</div>
       </div>
 
@@ -38,10 +38,10 @@ const StatsHeader: React.FC<StatsHeaderProps> = ({ stats }) => {
             <i className="fa-solid fa-money-bill-trend-up text-green-400"></i>
           </div>
         </div>
-        <div className={`text-3xl font-bold mb-1 ${stats.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-          {stats.netProfit >= 0 ? '+' : ''}${stats.netProfit.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+        <div className={`text-3xl font-bold mb-1 ${(stats.netProfit ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+          {(stats.netProfit ?? 0) >= 0 ? '+' : ''}${(stats.netProfit ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
         </div>
-        <div className="text-[10px] text-green-500 font-medium">账户余额: ${stats.balance.toLocaleString()}</div>
+        <div className="text-[10px] text-green-500 font-medium">账户余额: ${(stats.balance ?? 0).toLocaleString()}</div>
       </div>
 
       <div className="bg-[#151921] p-5 rounded-lg border border-slate-800 glow-pink">
@@ -51,7 +51,7 @@ const StatsHeader: React.FC<StatsHeaderProps> = ({ stats }) => {
             <i className="fa-solid fa-gauge-high text-pink-400"></i>
           </div>
         </div>
-        <div className="text-3xl font-bold mb-1">${stats.totalVolume.toLocaleString()}</div>
+        <div className="text-3xl font-bold mb-1">${(stats.totalVolume ?? 0).toLocaleString()}</div>
         <div className="text-[10px] text-pink-500 font-medium uppercase">流水统计</div>
       </div>
     </div>
